@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
 
+import pandas as pd
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import Command
 from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
@@ -10,9 +10,9 @@ from sqlalchemy import func, select
 
 from app.alerts import create_price_alert, create_smart_alert, list_alerts, remove_alert
 from app.charts import render_chart
-from app.db import Alert, NewsItem, NewsAsset, Watchlist, WatchlistItem, consume_usage, get_or_create_user, session_factory
+from app.db import Alert, Watchlist, WatchlistItem, consume_usage, get_or_create_user, session_factory
 from app.domain import MarketQuote
-from app.indicators import add_advanced_indicators, add_basic_indicators
+from app.indicators import add_basic_indicators
 from app.market import MarketService
 from app.news import NewsService
 from config import settings
@@ -33,28 +33,30 @@ LIMITS = {
 
 
 def main_menu() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📊 Market", callback_data="menu:market"), InlineKeyboardButton(text="⭐ Watchlist", callback_data="menu:watchlist")],
-        [InlineKeyboardButton(text="📰 News", callback_data="menu:news"), InlineKeyboardButton(text="🔔 Alerts", callback_data="menu:alerts")],
-        [InlineKeyboardButton(text="🔎 Scanner", callback_data="menu:scanner"), InlineKeyboardButton(text="🌅 Brief", callback_data="menu:brief")],
-        [InlineKeyboardButton(text="👤 Account", callback_data="menu:account")],
-    ])
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="📊 Market", callback_data="menu:market"), InlineKeyboardButton(text="⭐ Watchlist", callback_data="menu:watchlist")],
+            [InlineKeyboardButton(text="📰 News", callback_data="menu:news"), InlineKeyboardButton(text="🔔 Alerts", callback_data="menu:alerts")],
+            [InlineKeyboardButton(text="🔎 Scanner", callback_data="menu:scanner"), InlineKeyboardButton(text="🌅 Brief", callback_data="menu:brief")],
+            [InlineKeyboardButton(text="👤 Account", callback_data="menu:account")],
+        ]
+    )
 
 
 def asset_actions(symbol: str) -> InlineKeyboardMarkup:
     symbol = symbol.upper()
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📈 Chart", callback_data=f"chart:{symbol}"), InlineKeyboardButton(text="📰 News", callback_data=f"news:{symbol}")],
-        [InlineKeyboardButton(text="⭐ Add", callback_data=f"add:{symbol}"), InlineKeyboardButton(text="🔔 Alert", callback_data=f"smart:{symbol}")],
-    ])
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="📈 Chart", callback_data=f"chart:{symbol}"), InlineKeyboardButton(text="📰 News", callback_data=f"news:{symbol}")],
+            [InlineKeyboardButton(text="⭐ Add", callback_data=f"add:{symbol}"), InlineKeyboardButton(text="🧠 Smart alert", callback_data=f"smart:{symbol}")],
+        ]
+    )
 
 
 def fmt_quote(q: MarketQuote) -> str:
     change = f"{q.change:+.4f}" if q.change is not None else "n/a"
     pct = f"{q.change_percent:+.2f}%" if q.change_percent is not None else "n/a"
-    status = q.market_status
-    if q.is_stale and status == "open":
-        status = "stale"
+    status = "stale" if q.is_stale else q.market_status
     return (
         f"<b>{q.symbol}</b>\n"
         f"Price: <b>{q.price:.6g}</b>\n"
@@ -63,22 +65,22 @@ def fmt_quote(q: MarketQuote) -> str:
         f"High: {q.high if q.high is not None else 'n/a'}\n"
         f"Low: {q.low if q.low is not None else 'n/a'}\n"
         f"Volume: {q.volume:,.0f}\n\n"
-        f"🕒 {q.timestamp.astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}\n"
+        f"🕒 {q.timestamp.strftime('%Y-%m-%d %H:%M:%S UTC')}\n"
         f"📡 {q.source} • {status}"
     )
 
 
-async def ensure_user(message: Message):
+async def limit_for_user(user_id: int, username: str | None, key: str) -> bool:
     async with session_factory() as session:
-        return await get_or_create_user(session, message.from_user.id, message.from_user.username)
+        user = await get_or_create_user(session, user_id, username)
+        if user.plan != "free":
+            return True
+        ok, _ = await consume_usage(session, user.id, key, LIMITS[key])
+    return ok
 
 
 async def limit_or_message(message: Message, key: str) -> bool:
-    async with session_factory() as session:
-        user = await get_or_create_user(session, message.from_user.id, message.from_user.username)
-        if user.plan != "free":
-            return True
-        ok, used = await consume_usage(session, user.id, key, LIMITS[key])
+    ok = await limit_for_user(message.from_user.id, message.from_user.username, key)
     if not ok:
         await message.answer(f"Free plan limit reached for {key}: {LIMITS[key]}/day.")
     return ok
@@ -86,11 +88,10 @@ async def limit_or_message(message: Message, key: str) -> bool:
 
 @router.message(Command("start"))
 async def start(message: Message) -> None:
-    await ensure_user(message)
+    async with session_factory() as session:
+        await get_or_create_user(session, message.from_user.id, message.from_user.username)
     await message.answer(
-        "<b>Trading Intelligence Bot</b>\n\n"
-        "Watch the market, get relevant news, build charts and set alerts — inside Telegram.\n\n"
-        "Choose an action:",
+        "<b>Tickaro — Trading Intelligence</b>\n\nWatch markets, read relevant news, build charts and set alerts — directly inside Telegram.\n\nChoose an action:",
         reply_markup=main_menu(),
     )
 
@@ -99,12 +100,17 @@ async def start(message: Message) -> None:
 async def help_cmd(message: Message) -> None:
     await message.answer(
         "<b>Commands</b>\n\n"
-        "/price SYMBOL\n/chart SYMBOL\n/news SYMBOL\n/why SYMBOL\n"
+        "/price SYMBOL\n"
+        "/chart SYMBOL [PERIOD] [advanced]\n"
+        "/news SYMBOL\n"
+        "/why SYMBOL\n"
         "/watchlist\n/add SYMBOL\n/remove SYMBOL\n"
         "/alerts\n/alert SYMBOL CONDITION VALUE\n/remove_alert ID\n"
-        "/market\n/brief\n/scanner\n/account\n\n"
+        "/market\n/brief\n/scanner [MODE]\n/account\n\n"
         "Examples:\n"
         "/price AAPL\n"
+        "/chart NVDA 3mo\n"
+        "/chart NVDA 3mo advanced\n"
         "/alert NVDA above 200\n"
         "/alert BTCUSD pct_down 5\n"
         "/alert NVDA smart"
@@ -118,18 +124,16 @@ async def account(message: Message) -> None:
         watch_count = await session.scalar(select(func.count(WatchlistItem.id)).join(Watchlist).where(Watchlist.user_id == user.id)) or 0
         alerts = await session.scalar(select(func.count(Alert.id)).where(Alert.user_id == user.id, Alert.active.is_(True), Alert.alert_type == "price")) or 0
         smart = await session.scalar(select(func.count(Alert.id)).where(Alert.user_id == user.id, Alert.active.is_(True), Alert.alert_type == "smart")) or 0
-        lines = [
-            "👤 <b>My Account</b>",
-            f"Plan: <b>{user.plan.title()}</b>",
-            f"Watchlists: 1 / 1",
-            f"Tickers: {watch_count} / 10",
-            f"Active alerts: {alerts} / 3",
-            f"Smart alerts: {smart} / 3",
-            f"Timezone: {user.timezone}",
-            "",
-            "Daily limits: Price 50 • Charts 10 • News 30 • Scanner 5 • Brief 1 • Why 3 • Advanced indicators 3",
-        ]
-    await message.answer("\n".join(lines))
+        await message.answer(
+            "👤 <b>My Account</b>\n\n"
+            f"Plan: <b>{user.plan.title()}</b>\n"
+            f"Watchlists: 1 / 1\n"
+            f"Tickers: {watch_count} / 10\n"
+            f"Active alerts: {alerts} / 3\n"
+            f"Smart alerts: {smart} / 3\n"
+            f"Timezone: {user.timezone}\n\n"
+            "Daily limits: Price 50 • Charts 10 • News 30 • Scanner 5 • Brief 1 • Why 3 • Advanced 3"
+        )
 
 
 @router.message(Command("price"))
@@ -138,13 +142,13 @@ async def price(message: Message) -> None:
     if len(parts) != 2:
         await message.answer("Usage: /price AAPL")
         return
+    symbol = parts[1].strip().upper()
     if not await limit_or_message(message, "price"):
         return
-    symbol = parts[1].strip().upper()
     try:
         quote = await market.get_quote(symbol)
-    except Exception as exc:
-        await message.answer(f"Could not fetch {symbol}: {exc}")
+    except Exception:
+        await message.answer(f"Could not fetch market data for <b>{symbol}</b> right now.")
         return
     await message.answer(fmt_quote(quote), reply_markup=asset_actions(symbol))
 
@@ -152,22 +156,28 @@ async def price(message: Message) -> None:
 @router.message(Command("chart"))
 async def chart(message: Message) -> None:
     parts = message.text.split() if message.text else []
-    if len(parts) < 2:
-        await message.answer("Usage: /chart AAPL [timeframe]\nTimeframes: 1d, 5d, 1mo, 3mo, 6mo, 1y")
+    if len(parts) < 2 or len(parts) > 4:
+        await message.answer("Usage: /chart AAPL [1d|5d|1mo|3mo|6mo|1y] [advanced]")
+        return
+    symbol = parts[1].upper()
+    period = parts[2] if len(parts) >= 3 and parts[2].lower() != "advanced" else "1mo"
+    advanced = any(p.lower() == "advanced" for p in parts[2:])
+    allowed_periods = {"1d", "5d", "1mo", "3mo", "6mo", "1y"}
+    if period not in allowed_periods:
+        await message.answer("Unsupported period. Use: 1d, 5d, 1mo, 3mo, 6mo, 1y")
+        return
+    if advanced and not await limit_or_message(message, "advanced"):
         return
     if not await limit_or_message(message, "chart"):
         return
-    symbol = parts[1].upper()
-    period = parts[2] if len(parts) > 2 else "1mo"
-    interval = "1d"
-    if period in {"1d", "5d"}:
-        interval = "15m"
+    interval = "15m" if period in {"1d", "5d"} else "1d"
     try:
         df = await market.get_history(symbol, period=period, interval=interval)
-        image = await render_chart(df, symbol, f"{period}/{interval}")
-        await message.answer_photo(BufferedInputFile(image.getvalue(), filename=f"{symbol}.png"), caption=f"{symbol} • {period} • {interval}")
-    except Exception as exc:
-        await message.answer(f"Could not generate chart: {exc}")
+        image = await render_chart(df, symbol, f"{period}/{interval}", advanced=advanced)
+        caption = f"{symbol} • {period} • {interval}" + (" • advanced" if advanced else "")
+        await message.answer_photo(BufferedInputFile(image.getvalue(), filename=f"{symbol}.png"), caption=caption)
+    except Exception:
+        await message.answer(f"Could not generate a chart for <b>{symbol}</b> right now.")
 
 
 @router.message(Command("news"))
@@ -176,9 +186,9 @@ async def news_cmd(message: Message) -> None:
     if len(parts) != 2:
         await message.answer("Usage: /news AAPL")
         return
+    symbol = parts[1].strip().upper()
     if not await limit_or_message(message, "news"):
         return
-    symbol = parts[1].strip().upper()
     items = await news.search(symbol, 8)
     if not items:
         await message.answer(f"No recent news found for {symbol}.")
@@ -195,17 +205,18 @@ async def why_cmd(message: Message) -> None:
     if len(parts) != 2:
         await message.answer("Usage: /why AAPL")
         return
+    symbol = parts[1].strip().upper()
     if not await limit_or_message(message, "why"):
         return
-    symbol = parts[1].strip().upper()
     try:
         quote = await market.get_quote(symbol)
         items = await news.search(symbol, 5)
-    except Exception as exc:
-        await message.answer(f"Could not analyse {symbol}: {exc}")
+    except Exception:
+        await message.answer(f"Could not analyse <b>{symbol}</b> right now.")
         return
     direction = "up" if (quote.change_percent or 0) > 0 else "down" if (quote.change_percent or 0) < 0 else "flat"
-    body = [f"🔎 <b>Why {symbol} moved</b>", f"Price is {direction} {quote.change_percent:+.2f}% today." if quote.change_percent is not None else "Price change unavailable."]
+    move = f"{quote.change_percent:+.2f}%" if quote.change_percent is not None else "n/a"
+    body = [f"🔎 <b>Why {symbol} moved</b>", f"Today's move: <b>{move}</b> ({direction})."]
     if items:
         body.append("\n<b>Relevant recent headlines:</b>")
         body.extend([f"• {item.title}" for item in items[:3]])
@@ -257,8 +268,8 @@ async def add(message: Message) -> None:
             return
         try:
             quote = await market.get_quote(symbol)
-        except Exception as exc:
-            await message.answer(f"I can't validate {symbol}: {exc}")
+        except Exception:
+            await message.answer(f"I can't validate <b>{symbol}</b> right now.")
             return
         session.add(WatchlistItem(watchlist_id=watchlist.id, symbol=symbol, asset_class=quote.asset_class))
         await session.commit()
@@ -295,10 +306,7 @@ async def alerts(message: Message) -> None:
     lines = ["🔔 <b>Your Alerts</b>"]
     for row in rows:
         state = "🟢 Active" if row.active else "🔴 Inactive"
-        if row.alert_type == "smart":
-            detail = "smart • unusual move"
-        else:
-            detail = f"{row.condition} {row.threshold}"
+        detail = "smart • unusual move" if row.alert_type == "smart" else f"{row.condition} {row.threshold}"
         lines.append(f"#{row.id} {row.symbol} • {detail} • {state}")
     await message.answer("\n".join(lines))
 
@@ -358,27 +366,29 @@ async def scan_symbols(kind: str) -> list[str]:
             pct = float((close.iloc[-1] / close.iloc[-2] - 1) * 100)
             avg_vol = float(df["Volume"].tail(20).mean()) if "Volume" in df else 0.0
             vol = float(df["Volume"].iloc[-1]) if "Volume" in df else 0.0
-            rsi_df = add_basic_indicators(df)
-            rsi = float(rsi_df["RSI14"].iloc[-1]) if not pd_is_na(rsi_df["RSI14"].iloc[-1]) else 50.0
-            if kind == "gainers": score = pct
-            elif kind == "losers": score = -pct
-            elif kind == "volume": score = (vol / avg_vol) if avg_vol else 0
-            elif kind == "overbought": score = rsi if rsi > 70 else -999
-            elif kind == "oversold": score = -rsi if rsi < 30 else -999
-            else: score = pct
-            return symbol, score, pct, vol / avg_vol if avg_vol else 0, rsi
+            ind = add_basic_indicators(df)
+            rsi_value = ind["RSI14"].iloc[-1]
+            rsi = float(rsi_value) if pd.notna(rsi_value) else 50.0
+            volume_ratio = vol / avg_vol if avg_vol else 0.0
+            if kind == "gainers":
+                score = pct
+            elif kind == "losers":
+                score = -pct
+            elif kind == "volume":
+                score = volume_ratio
+            elif kind == "overbought":
+                score = rsi if rsi > 70 else -999
+            elif kind == "oversold":
+                score = -rsi if rsi < 30 else -999
+            else:
+                score = pct
+            return symbol, score, pct, volume_ratio, rsi
         except Exception:
             return None
+
     rows = [r for r in await asyncio.gather(*(one(s) for s in settings.scanner_symbols)) if r]
     rows.sort(key=lambda x: x[1], reverse=True)
-    return [f"{s} • {pct:+.2f}% • vol {vr:.1f}× • RSI {rsi:.0f}" for s, _, pct, _, rsi in rows[:10]]
-
-
-def pd_is_na(value) -> bool:
-    try:
-        return bool(__import__("pandas").isna(value))
-    except Exception:
-        return False
+    return [f"{s} • {pct:+.2f}% • vol {vr:.1f}× • RSI {rsi:.0f}" for s, _, pct, vr, rsi in rows[:10]]
 
 
 @router.message(Command("scanner"))
@@ -386,9 +396,18 @@ async def scanner(message: Message) -> None:
     if not await limit_or_message(message, "scanner"):
         return
     parts = message.text.split(maxsplit=1) if message.text else []
-    kind = parts[1].lower() if len(parts) == 2 else "gainers"
-    mapping = {"top_gainers": "gainers", "gainers": "gainers", "top_losers": "losers", "losers": "losers", "volume_spike": "volume", "volume": "volume", "overbought": "overbought", "oversold": "oversold"}
-    kind = mapping.get(kind, "gainers")
+    raw_kind = parts[1].lower() if len(parts) == 2 else "gainers"
+    mapping = {
+        "top_gainers": "gainers",
+        "gainers": "gainers",
+        "top_losers": "losers",
+        "losers": "losers",
+        "volume_spike": "volume",
+        "volume": "volume",
+        "overbought": "overbought",
+        "oversold": "oversold",
+    }
+    kind = mapping.get(raw_kind, "gainers")
     rows = await scan_symbols(kind)
     title = kind.replace("_", " ").title()
     await message.answer("🔎 <b>Scanner • " + title + "</b>\n\n" + ("\n".join(rows) if rows else "No results."))
@@ -435,15 +454,13 @@ async def chart_callback(callback: CallbackQuery) -> None:
         df = await market.get_history(symbol, "1mo", "1d")
         image = await render_chart(df, symbol, "1mo/1d")
         await callback.message.answer_photo(BufferedInputFile(image.getvalue(), filename=f"{symbol}.png"))
-    except Exception as exc:
-        await callback.message.answer(f"Chart error: {exc}")
+    except Exception:
+        await callback.message.answer(f"Could not generate a chart for {symbol}.")
     await callback.answer()
 
 
 async def _callback_limit(callback: CallbackQuery, key: str) -> bool:
-    async with session_factory() as session:
-        user = await get_or_create_user(session, callback.from_user.id, callback.from_user.username)
-        ok, _ = await consume_usage(session, user.id, key, LIMITS[key]) if user.plan == "free" else (True, 0)
+    ok = await limit_for_user(callback.from_user.id, callback.from_user.username, key)
     if not ok:
         await callback.message.answer(f"Free plan limit reached: {LIMITS[key]}/day.")
     return ok
@@ -467,7 +484,6 @@ async def news_callback(callback: CallbackQuery) -> None:
 @router.callback_query(F.data.startswith("add:"))
 async def add_callback(callback: CallbackQuery) -> None:
     symbol = callback.data.split(":", 1)[1]
-    fake = type("M", (), {"from_user": callback.from_user})
     async with session_factory() as session:
         user = await get_or_create_user(session, callback.from_user.id, callback.from_user.username)
         watchlist = (await session.execute(select(Watchlist).where(Watchlist.user_id == user.id))).scalar_one()
@@ -510,7 +526,7 @@ async def menu_callback(callback: CallbackQuery) -> None:
         "brief": "Use /brief for the daily summary.",
         "account": "Use /account to see your plan and usage.",
     }
-    await callback.message.answer(prompts[target])
+    await callback.message.answer(prompts.get(target, "Use /help to see available commands."))
     await callback.answer()
 
 
