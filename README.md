@@ -1,4 +1,4 @@
-# Telegram Trading Intelligence Bot
+# Tickaro — Telegram Trading Intelligence Bot
 
 Telegram-native market intelligence bot. The MVP focuses on prices, charts, news, watchlists, alerts, scanner, daily brief, and account/usage controls.
 
@@ -23,11 +23,30 @@ Telegram-native market intelligence bot. The MVP focuses on prices, charts, news
 4. Set `BOT_TOKEN` to the token from BotFather.
 5. Run: `python main.py`
 
+The application exposes `GET /health` for hosting health checks.
+
 ## Commands
 
-`/start` `/help` `/account` `/price SYMBOL` `/chart SYMBOL [period]` `/news SYMBOL` `/why SYMBOL` `/market` `/brief` `/scanner [mode]` `/watchlist` `/add SYMBOL` `/remove SYMBOL` `/alerts` `/alert SYMBOL CONDITION VALUE` `/remove_alert ID`
+- `/start`
+- `/help`
+- `/account`
+- `/price SYMBOL`
+- `/chart SYMBOL [1d|5d|1mo|3mo|6mo|1y] [advanced]`
+- `/news SYMBOL`
+- `/why SYMBOL`
+- `/watchlist`
+- `/add SYMBOL`
+- `/remove SYMBOL`
+- `/alerts`
+- `/alert SYMBOL CONDITION VALUE`
+- `/remove_alert ID`
+- `/market`
+- `/brief`
+- `/scanner [top_gainers|top_losers|volume_spike|overbought|oversold]`
 
 Smart alert example: `/alert NVDA smart`
+
+Advanced chart example: `/chart NVDA 3mo advanced`
 
 ## Free MVP limits
 
@@ -44,6 +63,16 @@ Smart alert example: `/alert NVDA smart`
 - Basic indicators included
 - Advanced indicators: 3/day
 
-## Important
+## Tests
 
-External data providers can fail or return stale data. The application is designed around provider adapters so sources can be replaced later. Before production launch, verify current provider behaviour, limits, and data quality.
+Run the unit test suite with:
+
+`pytest -q`
+
+CI also compiles the project and runs the tests on pushes and pull requests targeting `main`.
+
+## Deployment
+
+For Railway production, set `BOT_TOKEN`, `DATABASE_URL`, and `REDIS_URL` as environment variables. PostgreSQL and Redis are external services attached to the application; secrets are not stored in Git.
+
+External data providers can fail or return stale data. The application uses provider adapters so sources can be replaced later. Before production launch, verify current provider behaviour, limits, and data quality.
