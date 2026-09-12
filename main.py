@@ -61,6 +61,7 @@ async def run_bot() -> None:
     if not settings.bot_token.strip():
         raise RuntimeError("BOT_TOKEN is required to start the Telegram bot.")
 
+    health_server = asyncio.create_task(run_health_server())
     await init_db()
     bot = Bot(
         token=settings.bot_token,
@@ -68,7 +69,6 @@ async def run_bot() -> None:
     )
     dp = build_dispatcher()
     worker = asyncio.create_task(alert_loop(bot))
-    health_server = asyncio.create_task(run_health_server())
     try:
         await dp.start_polling(bot)
     finally:
