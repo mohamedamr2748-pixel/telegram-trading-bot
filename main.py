@@ -5,6 +5,8 @@ import logging
 
 import uvicorn
 from aiogram import Bot
+from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
@@ -57,7 +59,10 @@ async def run_health_server() -> None:
 
 async def run_bot() -> None:
     await init_db()
-    bot = Bot(token=settings.bot_token)
+    bot = Bot(
+        token=settings.bot_token,
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+    )
     dp = build_dispatcher()
     worker = asyncio.create_task(alert_loop(bot))
     health_server = asyncio.create_task(run_health_server())
