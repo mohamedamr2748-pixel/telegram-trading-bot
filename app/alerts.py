@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from datetime import datetime, timezone
 
 from sqlalchemy import select
@@ -11,6 +12,25 @@ from app.market import MarketService
 
 FREE_ACTIVE_ALERTS = 3
 FREE_ACTIVE_SMART_ALERTS = 3
+VALID_PRICE_CONDITIONS = {"above", "below", "pct_up", "pct_down"}
+
+
+def validate_price_alert(condition: str, threshold: float) -> str:
+    condition = condition.strip().lower()
+    if condition not in VALID_PRICE_CONDITIONS:
+        raise ValueError("Condition must be above, below, pct_up, or pct_down.")
+    if not math.isfinite(threshold):
+        raise ValueError("Threshold must be a finite number.")
+    if threshold < 0 and condition in {"pct_up", "pct_down"}:
+        raise ValueError("Percentage thresholds must be non-negative.")
+    return condition
+
+
+def validate_symbol(symbol: str) -> str:
+    cleaned = symbol.strip().upper()
+    if not cleaned or len(cleaned) > 64 or any(ch.isspace() for ch in cleaned):
+        raise ValueError("Please provide a valid symbol.")
+    return cleaned
 
 
 async def active_alert_count(session: AsyncSession, user_id: int, alert_type: str | None = None) -> int:
@@ -22,12 +42,12 @@ async def active_alert_count(session: AsyncSession, user_id: int, alert_type: st
 
 
 async def create_price_alert(session: AsyncSession, user: User, symbol: str, condition: str, threshold: float) -> Alert:
+    symbol = validate_symbol(symbol)
+    condition = validate_price_alert(condition, threshold)
     count = await active_alert_count(session, user.id, "price")
     if user.plan == "free" and count >= FREE_ACTIVE_ALERTS:
         raise ValueError(f"Free plan limit reached: {FREE_ACTIVE_ALERTS} active alerts.")
-    if condition not in {"above", "below", "pct_up", "pct_down"}:
-        raise ValueError("Condition must be above, below, pct_up, or pct_down.")
-    alert = Alert(user_id=user.id, symbol=symbol.upper(), alert_type="price", condition=condition, threshold=threshold, active=True)
+    alert = Alert(user_id=user.id, symbol=symbol, alert_type="price", condition=condition, threshold=threshold, active=True)
     session.add(alert)
     await session.commit()
     await session.refresh(alert)
@@ -35,10 +55,11 @@ async def create_price_alert(session: AsyncSession, user: User, symbol: str, con
 
 
 async def create_smart_alert(session: AsyncSession, user: User, symbol: str) -> Alert:
+    symbol = validate_symbol(symbol)
     count = await active_alert_count(session, user.id, "smart")
     if user.plan == "free" and count >= FREE_ACTIVE_SMART_ALERTS:
         raise ValueError(f"Free plan limit reached: {FREE_ACTIVE_SMART_ALERTS} smart alerts.")
-    alert = Alert(user_id=user.id, symbol=symbol.upper(), alert_type="smart", condition="unusual_move", active=True)
+    alert = Alert(user_id=user.id, symbol=symbol, alert_type="smart", condition="unusual_move", active=True)
     session.add(alert)
     await session.commit()
     await session.refresh(alert)
@@ -75,18 +96,19 @@ async def evaluate_alerts(session: AsyncSession, market: MarketService, send_mes
         text = ""
         if alert.alert_type == "price":
             value = quote.price
-            if alert.condition == "above" and value >= float(alert.threshold):
+            threshold = float(alert.threshold)
+            if alert.condition == "above" and value >= threshold:
                 triggered = True
-                text = f"Price crossed above {alert.threshold:g}."
-            elif alert.condition == "below" and value <= float(alert.threshold):
+                text = f"Price is above {threshold:g}."
+            elif alert.condition == "below" and value <= threshold:
                 triggered = True
-                text = f"Price crossed below {alert.threshold:g}."
+                text = f"Price is below {threshold:g}."
             elif alert.condition in {"pct_up", "pct_down"} and quote.change_percent is not None:
                 pct = float(quote.change_percent)
-                if alert.condition == "pct_up" and pct >= float(alert.threshold):
+                if alert.condition == "pct_up" and pct >= threshold:
                     triggered = True
                     text = f"Daily move reached +{pct:.2f}%."
-                elif alert.condition == "pct_down" and pct <= -abs(float(alert.threshold)):
+                elif alert.condition == "pct_down" and pct <= -abs(threshold):
                     triggered = True
                     text = f"Daily move reached {pct:.2f}%."
         else:
