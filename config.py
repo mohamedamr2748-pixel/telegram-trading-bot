@@ -2,7 +2,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    bot_token: str
+    bot_token: str = ""
     database_url: str = "sqlite+aiosqlite:///./bot.db"
     redis_url: str | None = None
     default_timezone: str = "UTC"
