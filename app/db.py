@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
-from typing import Any
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, select
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from config import settings
 
@@ -25,7 +24,8 @@ class Base(DeclarativeBase):
 class User(Base):
     __tablename__ = "users"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    telegram_id: Mapped[int] = mapped_column(Integer, unique=True, index=True)
+    # Telegram user/chat IDs can exceed PostgreSQL's 32-bit INTEGER range.
+    telegram_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
     username: Mapped[str | None] = mapped_column(String(255), nullable=True)
     plan: Mapped[str] = mapped_column(String(32), default="free")
     timezone: Mapped[str] = mapped_column(String(64), default="UTC")
@@ -107,6 +107,10 @@ session_factory = async_sessionmaker(engine, expire_on_commit=False)
 async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        if conn.dialect.name == "postgresql":
+            # Existing deployments may have created this column as INTEGER.
+            # Widen it in-place so real Telegram IDs are accepted.
+            await conn.execute(text("ALTER TABLE users ALTER COLUMN telegram_id TYPE BIGINT"))
 
 
 async def get_or_create_user(session: AsyncSession, telegram_id: int, username: str | None) -> User:
