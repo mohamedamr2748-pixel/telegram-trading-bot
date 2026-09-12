@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 jobs:
-  compile:
+  test:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -23,3 +23,8 @@ jobs:
 
       - name: Compile Python files
         run: python -m compileall -q .
+
+      - name: Run unit tests
+        env:
+          BOT_TOKEN: test-token
+        run: pytest -q
