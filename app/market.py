@@ -30,12 +30,18 @@ class YFinanceProvider(MarketProvider):
     @staticmethod
     def _classify(symbol: str) -> str:
         s = symbol.upper()
-        if s.endswith("-USD") or s.endswith("USD") and len(s) > 6:
-            return "crypto"
         if s.startswith("^"):
             return "index"
-        if "=F" in s:
+        if s.endswith("=F"):
             return "commodity"
+        if s.endswith("-USD"):
+            return "crypto"
+        if s in {"BTCUSD", "ETHUSD", "SOLUSD", "XRPUSD", "BNBUSD"}:
+            return "crypto"
+        if s in {"EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD"}:
+            return "forex"
+        if s in {"XAUUSD", "XAGUSD"}:
+            return "metal"
         return "stock"
 
     async def get_quote(self, symbol: str) -> MarketQuote:
@@ -80,6 +86,7 @@ class YFinanceProvider(MarketProvider):
                 source=self.name,
                 market_status="open" if ts.date() == datetime.now(timezone.utc).date() else "unknown",
             )
+
         return await asyncio.to_thread(fetch)
 
     async def get_history(self, symbol: str, period: str = "1mo", interval: str = "1d") -> pd.DataFrame:
@@ -88,6 +95,7 @@ class YFinanceProvider(MarketProvider):
             if df.empty:
                 raise ValueError(f"No historical data found for {symbol}")
             return df
+
         return await asyncio.to_thread(fetch)
 
 
@@ -97,9 +105,13 @@ class BiQuoteProvider(MarketProvider):
 
     async def get_quote(self, symbol: str) -> MarketQuote:
         async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.get(f"{self.base_url}/{symbol.upper()}", params={"allowStale": "true"})
+            response = await client.get(
+                f"{self.base_url}/{symbol.upper()}",
+                params={"allowStale": "true"},
+            )
             response.raise_for_status()
             data = response.json()
+
         timestamp = datetime.now(timezone.utc)
         raw_timestamp = data.get("timestamp") or data.get("time")
         if isinstance(raw_timestamp, str):
@@ -107,6 +119,7 @@ class BiQuoteProvider(MarketProvider):
                 timestamp = datetime.fromisoformat(raw_timestamp.replace("Z", "+00:00"))
             except ValueError:
                 pass
+
         price = to_float(data.get("mid") or data.get("price"))
         if price <= 0:
             raise ValueError(f"No valid price returned for {symbol}")
@@ -129,8 +142,6 @@ class BiQuoteProvider(MarketProvider):
         )
 
     async def get_history(self, symbol: str, period: str = "1mo", interval: str = "1d") -> pd.DataFrame:
-        # biquote history is tick-oriented; for candlestick charts we use yfinance
-        # where a standard OHLCV history is available.
         raise NotImplementedError("Use yfinance for OHLC history")
 
 
@@ -142,7 +153,11 @@ class MarketService:
     @staticmethod
     def _prefer_biquote(symbol: str) -> bool:
         s = symbol.upper()
-        return s in {"EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD", "XAUUSD", "XAGUSD", "BTCUSD", "ETHUSD", "USOIL", "UKOIL"}
+        return s in {
+            "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD",
+            "XAUUSD", "XAGUSD", "BTCUSD", "ETHUSD", "SOLUSD", "XRPUSD", "BNBUSD",
+            "USOIL", "UKOIL", "US30", "NAS100", "SPX500", "GER40", "UK100",
+        }
 
     async def get_quote(self, symbol: str) -> MarketQuote:
         symbol = symbol.strip().upper()
@@ -151,6 +166,8 @@ class MarketService:
         for provider in providers:
             try:
                 if provider is self.yf and not settings.yfinance_enabled:
+                    continue
+                if provider is self.bq and not settings.biquote_enabled:
                     continue
                 return await provider.get_quote(symbol)
             except Exception as exc:
