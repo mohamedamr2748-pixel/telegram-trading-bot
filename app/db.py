@@ -1,0 +1,140 @@
+from __future__ import annotations
+
+from datetime import date, datetime, timezone
+from typing import Any
+
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+from config import settings
+
+
+def _normalise_database_url(url: str) -> str:
+    if url.startswith("postgres://"):
+        return url.replace("postgres://", "postgresql+asyncpg://", 1)
+    if url.startswith("postgresql://"):
+        return url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    return url
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class User(Base):
+    __tablename__ = "users"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    telegram_id: Mapped[int] = mapped_column(Integer, unique=True, index=True)
+    username: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    plan: Mapped[str] = mapped_column(String(32), default="free")
+    timezone: Mapped[str] = mapped_column(String(64), default="UTC")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class Watchlist(Base):
+    __tablename__ = "watchlists"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(100), default="My Watchlist")
+
+
+class WatchlistItem(Base):
+    __tablename__ = "watchlist_items"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    watchlist_id: Mapped[int] = mapped_column(ForeignKey("watchlists.id", ondelete="CASCADE"), index=True)
+    symbol: Mapped[str] = mapped_column(String(64), index=True)
+    asset_class: Mapped[str] = mapped_column(String(32), default="unknown")
+    smart_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    __table_args__ = (UniqueConstraint("watchlist_id", "symbol", name="uq_watchlist_symbol"),)
+
+
+class Alert(Base):
+    __tablename__ = "alerts"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    symbol: Mapped[str] = mapped_column(String(64), index=True)
+    alert_type: Mapped[str] = mapped_column(String(32), default="price")
+    condition: Mapped[str] = mapped_column(String(32))
+    threshold: Mapped[float | None] = mapped_column(nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    last_triggered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class NewsItem(Base):
+    __tablename__ = "news"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    canonical_url: Mapped[str] = mapped_column(Text, unique=True, index=True)
+    title: Mapped[str] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(String(255), default="unknown")
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    relevance: Mapped[int] = mapped_column(Integer, default=0)
+    urgency: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class NewsAsset(Base):
+    __tablename__ = "news_assets"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    news_id: Mapped[int] = mapped_column(ForeignKey("news.id", ondelete="CASCADE"), index=True)
+    symbol: Mapped[str] = mapped_column(String(64), index=True)
+    __table_args__ = (UniqueConstraint("news_id", "symbol", name="uq_news_asset"),)
+
+
+class MarketSnapshot(Base):
+    __tablename__ = "market_snapshots"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    symbol: Mapped[str] = mapped_column(String(64), index=True)
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    price: Mapped[float] = mapped_column()
+    volume: Mapped[float] = mapped_column(default=0)
+    source: Mapped[str] = mapped_column(String(64))
+
+
+class Usage(Base):
+    __tablename__ = "usage"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    day: Mapped[date] = mapped_column(Date, index=True)
+    key: Mapped[str] = mapped_column(String(64), index=True)
+    count: Mapped[int] = mapped_column(Integer, default=0)
+    __table_args__ = (UniqueConstraint("user_id", "day", "key", name="uq_usage"),)
+
+
+engine = create_async_engine(_normalise_database_url(settings.database_url), pool_pre_ping=True)
+session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+
+async def init_db() -> None:
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+
+async def get_or_create_user(session: AsyncSession, telegram_id: int, username: str | None) -> User:
+    result = await session.execute(select(User).where(User.telegram_id == telegram_id))
+    user = result.scalar_one_or_none()
+    if user:
+        if username and user.username != username:
+            user.username = username
+            await session.commit()
+        return user
+    user = User(telegram_id=telegram_id, username=username)
+    session.add(user)
+    await session.flush()
+    session.add(Watchlist(user_id=user.id, name="My Watchlist"))
+    await session.commit()
+    return user
+
+
+async def consume_usage(session: AsyncSession, user_id: int, key: str, limit: int) -> tuple[bool, int]:
+    today = date.today()
+    result = await session.execute(select(Usage).where(Usage.user_id == user_id, Usage.day == today, Usage.key == key))
+    row = result.scalar_one_or_none()
+    if row is None:
+        row = Usage(user_id=user_id, day=today, key=key, count=0)
+        session.add(row)
+        await session.flush()
+    if row.count >= limit:
+        return False, row.count
+    row.count += 1
+    await session.commit()
+    return True, row.count
