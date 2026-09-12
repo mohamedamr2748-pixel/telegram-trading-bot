@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     market_poll_seconds: int = 30
     alert_poll_seconds: int = 15
     news_poll_seconds: int = 120
+    port: int = 8080
     log_level: str = "INFO"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", case_sensitive=False)
