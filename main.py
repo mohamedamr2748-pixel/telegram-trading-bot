@@ -58,6 +58,9 @@ async def run_health_server() -> None:
 
 
 async def run_bot() -> None:
+    if not settings.bot_token.strip():
+        raise RuntimeError("BOT_TOKEN is required to start the Telegram bot.")
+
     await init_db()
     bot = Bot(
         token=settings.bot_token,
