@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
@@ -14,7 +14,7 @@ class MarketQuote:
     volume: float = 0.0
     change: float | None = None
     change_percent: float | None = None
-    timestamp: datetime = datetime.now(timezone.utc)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     source: str = "unknown"
     market_status: str = "unknown"
 
