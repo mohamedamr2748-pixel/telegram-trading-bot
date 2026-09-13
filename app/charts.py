@@ -4,6 +4,7 @@ import io
 
 import matplotlib
 matplotlib.use("Agg")
+import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import mplfinance as mpf
 import pandas as pd
@@ -65,6 +66,123 @@ def _line(series: pd.Series, panel: int, color: str, width: float = 1.0, linesty
     )
 
 
+async def render_google_finance_chart(
+    df: pd.DataFrame,
+    symbol: str,
+    timeframe: str,
+    prev_close: float | None = None,
+    price: float | None = None,
+    currency: str | None = None,
+    change_percent: float | None = None,
+) -> io.BytesIO:
+    """Render a compact Google Finance-style chart from Google Finance price points."""
+    if "Close" not in df.columns:
+        raise ValueError("Google Finance chart requires a Close/price series")
+
+    work = df.copy()
+    work.index = pd.to_datetime(work.index, utc=True)
+    work["Close"] = pd.to_numeric(work["Close"], errors="coerce")
+    work = work.dropna(subset=["Close"]).sort_index()
+    work = work[~work.index.duplicated(keep="last")]
+    if work.empty:
+        raise ValueError("No valid price points available for chart")
+
+    # Telegram does not need thousands of points for a readable chart.
+    if len(work) > 2500:
+        work = work.iloc[-2500:]
+
+    series = work["Close"]
+    last_price = price if price is not None else float(series.iloc[-1])
+    currency_text = f" {currency}" if currency else ""
+    move_text = ""
+    if change_percent is not None:
+        move_text = f"  {change_percent:+.2f}%"
+
+    fig, ax = plt.subplots(figsize=(12.8, 7.2), dpi=160, facecolor="#0b1220")
+    ax.set_facecolor("#111827")
+
+    x = series.index.to_pydatetime()
+    y = series.to_numpy(dtype=float)
+    line_color = "#60a5fa"
+    fill_color = "#60a5fa"
+    muted = "#94a3b8"
+
+    ax.plot(x, y, linewidth=2.0, color=line_color, solid_capstyle="round")
+    ax.fill_between(x, y, y.min(), color=fill_color, alpha=0.08)
+
+    if prev_close is not None and prev_close > 0:
+        ax.axhline(
+            prev_close,
+            linewidth=0.9,
+            linestyle=(0, (2, 3)),
+            color=muted,
+            alpha=0.85,
+        )
+
+    # Highlight the latest available point, matching the interaction cue used by
+    # Google Finance while keeping the output static for Telegram.
+    ax.scatter([x[-1]], [y[-1]], s=28, color=line_color, zorder=5)
+    ax.annotate(
+        f"{last_price:.6g}{currency_text}",
+        xy=(x[-1], y[-1]),
+        xytext=(-8, 12),
+        textcoords="offset points",
+        ha="right",
+        va="bottom",
+        fontsize=9,
+        color="#f8fafc",
+        bbox={"boxstyle": "round,pad=0.28", "fc": "#1f2937", "ec": "#334155", "alpha": 0.95},
+    )
+
+    ax.grid(axis="y", color="#263246", linestyle=":", linewidth=0.8)
+    ax.grid(axis="x", visible=False)
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    ax.tick_params(colors=muted, labelsize=8, length=0)
+    ax.yaxis.tick_right()
+
+    locator = mdates.AutoDateLocator(minticks=4, maxticks=7)
+    ax.xaxis.set_major_locator(locator)
+    ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator))
+
+    ax.set_title(
+        f"{symbol.upper()}  •  {last_price:.6g}{currency_text}{move_text}",
+        loc="left",
+        color="#f8fafc",
+        fontsize=15,
+        fontweight="bold",
+        pad=16,
+    )
+    ax.text(
+        0.0,
+        1.015,
+        timeframe.upper(),
+        transform=ax.transAxes,
+        ha="left",
+        va="bottom",
+        color=muted,
+        fontsize=8,
+    )
+    if prev_close is not None and prev_close > 0:
+        ax.text(
+            0.99,
+            0.03,
+            f"Prev close  {prev_close:.6g}",
+            transform=ax.transAxes,
+            ha="right",
+            va="bottom",
+            color=muted,
+            fontsize=8,
+        )
+
+    fig.subplots_adjust(left=0.045, right=0.945, top=0.84, bottom=0.12)
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=160, bbox_inches="tight", facecolor=fig.get_facecolor())
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+
 async def render_chart(
     df: pd.DataFrame,
     symbol: str,
@@ -96,7 +214,6 @@ async def render_chart(
         if "BB_LOWER" in enriched:
             plots.append(_line(enriched["BB_LOWER"], 0, "#a78bfa", 0.9))
 
-    # Volume is plotted by mplfinance itself. RSI gets its own panel.
     if "RSI14" in enriched:
         plots.extend(
             [
@@ -107,34 +224,18 @@ async def render_chart(
             ]
         )
 
-    # Advanced tier: MACD line, signal and histogram.
     if advanced and {"MACD", "MACD_SIGNAL"}.issubset(enriched.columns):
         histogram = enriched["MACD"] - enriched["MACD_SIGNAL"]
         plots.extend(
             [
-                mpf.make_addplot(
-                    histogram.clip(lower=0),
-                    type="bar",
-                    panel=macd_panel,
-                    color="#22c55e",
-                    alpha=0.55,
-                    width=0.7,
-                ),
-                mpf.make_addplot(
-                    histogram.clip(upper=0),
-                    type="bar",
-                    panel=macd_panel,
-                    color="#ef4444",
-                    alpha=0.55,
-                    width=0.7,
-                ),
+                mpf.make_addplot(histogram.clip(lower=0), type="bar", panel=macd_panel, color="#22c55e", alpha=0.55, width=0.7),
+                mpf.make_addplot(histogram.clip(upper=0), type="bar", panel=macd_panel, color="#ef4444", alpha=0.55, width=0.7),
                 _line(enriched["MACD"], macd_panel, "#60a5fa", 1.0),
                 _line(enriched["MACD_SIGNAL"], macd_panel, "#f59e0b", 1.0),
                 _line(pd.Series(0.0, index=enriched.index), macd_panel, "#64748b", 0.5, "--"),
             ]
         )
 
-    panel_count = 1 + (1 if has_volume else 0) + 1 + (1 if advanced else 0)
     ratios = [6]
     if has_volume:
         ratios.append(1.8)
@@ -171,8 +272,6 @@ async def render_chart(
         color="#f8fafc",
     )
     fig.subplots_adjust(top=0.94, left=0.05, right=0.96, bottom=0.07, hspace=0.08)
-
-    # Small footer keeps the chart self-explanatory in Telegram.
     fig.text(
         0.055,
         0.018,
@@ -182,14 +281,7 @@ async def render_chart(
         fontsize=7.5,
         color="#94a3b8",
     )
-
-    fig.savefig(
-        buf,
-        format="png",
-        dpi=160,
-        bbox_inches="tight",
-        facecolor=fig.get_facecolor(),
-    )
+    fig.savefig(buf, format="png", dpi=160, bbox_inches="tight", facecolor=fig.get_facecolor())
     plt.close(fig)
     buf.seek(0)
     return buf
