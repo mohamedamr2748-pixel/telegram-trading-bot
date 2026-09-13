@@ -4,7 +4,7 @@ import re
 path = Path("app/bot.py")
 text = path.read_text()
 
-pattern = r'@router\\.message\\(Command\("account"\)\\)\\nasync def account\\(message: Message\\) -> None:\\n.*?\\n\\n\\n@router\\.message\\(Command\("price"\)\\)'
+pattern = r'@router\.message\(Command\("account"\)\)\nasync def account\(message: Message\) -> None:\n.*?\n\n\n@router\.message\(Command\("price"\)\)'
 replacement = '''@router.message(Command("account"))
 async def account(message: Message) -> None:
     from datetime import date
@@ -35,22 +35,22 @@ async def account(message: Message) -> None:
         }
 
         await message.answer(
-            "👤 <b>MY ACCOUNT</b>\\n\\n"
-            "<b>PLAN</b>\\n"
-            f"🆓 {user.plan.title()}\\n\\n"
-            "<b>PORTFOLIO</b>\\n"
-            f"⭐ Watchlist       <b>{watch_count} / 10</b>\\n"
-            f"🔔 Price alerts   <b>{alerts} / 3</b>\\n"
-            f"🧠 Smart alerts   <b>{smart} / 3</b>\\n\\n"
-            "<b>SETTINGS</b>\\n"
-            f"🌍 Timezone        <code>{user.timezone}</code>\\n\\n"
-            "<b>USAGE • TODAY</b>\\n"
-            f"💰 Price           <code>{usage.get('price', 0)} / {limits['price']}</code>\\n"
-            f"📈 Charts          <code>{usage.get('chart', 0)} / {limits['chart']}</code>\\n"
-            f"📰 News            <code>{usage.get('news', 0)} / {limits['news']}</code>\\n"
-            f"🔎 Scanner         <code>{usage.get('scanner', 0)} / {limits['scanner']}</code>\\n"
-            f"🌅 Brief           <code>{usage.get('brief', 0)} / {limits['brief']}</code>\\n"
-            f"🔍 Why             <code>{usage.get('why', 0)} / {limits['why']}</code>\\n"
+            "👤 <b>MY ACCOUNT</b>\n\n"
+            "<b>PLAN</b>\n"
+            f"🆓 {user.plan.title()}\n\n"
+            "<b>PORTFOLIO</b>\n"
+            f"⭐ Watchlist       <b>{watch_count} / 10</b>\n"
+            f"🔔 Price alerts   <b>{alerts} / 3</b>\n"
+            f"🧠 Smart alerts   <b>{smart} / 3</b>\n\n"
+            "<b>SETTINGS</b>\n"
+            f"🌍 Timezone        <code>{user.timezone}</code>\n\n"
+            "<b>USAGE • TODAY</b>\n"
+            f"💰 Price           <code>{usage.get('price', 0)} / {limits['price']}</code>\n"
+            f"📈 Charts          <code>{usage.get('chart', 0)} / {limits['chart']}</code>\n"
+            f"📰 News            <code>{usage.get('news', 0)} / {limits['news']}</code>\n"
+            f"🔎 Scanner         <code>{usage.get('scanner', 0)} / {limits['scanner']}</code>\n"
+            f"🌅 Brief           <code>{usage.get('brief', 0)} / {limits['brief']}</code>\n"
+            f"🔍 Why             <code>{usage.get('why', 0)} / {limits['why']}</code>\n"
             f"📊 Advanced        <code>{usage.get('advanced', 0)} / {limits['advanced']}</code>"
         )
 
