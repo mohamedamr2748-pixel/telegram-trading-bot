@@ -10,6 +10,7 @@ import mplfinance as mpf
 import pandas as pd
 
 from app.indicators import add_advanced_indicators, add_basic_indicators
+from config import settings
 
 
 _CHART_STYLE = mpf.make_mpf_style(
@@ -87,16 +88,13 @@ async def render_google_finance_chart(
     if work.empty:
         raise ValueError("No valid price points available for chart")
 
-    # Telegram does not need thousands of points for a readable chart.
     if len(work) > 2500:
         work = work.iloc[-2500:]
 
     series = work["Close"]
     last_price = price if price is not None else float(series.iloc[-1])
     currency_text = f" {currency}" if currency else ""
-    move_text = ""
-    if change_percent is not None:
-        move_text = f"  {change_percent:+.2f}%"
+    move_text = f"  {change_percent:+.2f}%" if change_percent is not None else ""
 
     fig, ax = plt.subplots(figsize=(12.8, 7.2), dpi=160, facecolor="#0b1220")
     ax.set_facecolor("#111827")
@@ -111,16 +109,8 @@ async def render_google_finance_chart(
     ax.fill_between(x, y, y.min(), color=fill_color, alpha=0.08)
 
     if prev_close is not None and prev_close > 0:
-        ax.axhline(
-            prev_close,
-            linewidth=0.9,
-            linestyle=(0, (2, 3)),
-            color=muted,
-            alpha=0.85,
-        )
+        ax.axhline(prev_close, linewidth=0.9, linestyle=(0, (2, 3)), color=muted, alpha=0.85)
 
-    # Highlight the latest available point, matching the interaction cue used by
-    # Google Finance while keeping the output static for Telegram.
     ax.scatter([x[-1]], [y[-1]], s=28, color=line_color, zorder=5)
     ax.annotate(
         f"{last_price:.6g}{currency_text}",
@@ -144,7 +134,6 @@ async def render_google_finance_chart(
     locator = mdates.AutoDateLocator(minticks=4, maxticks=7)
     ax.xaxis.set_major_locator(locator)
     ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator))
-
     ax.set_title(
         f"{symbol.upper()}  •  {last_price:.6g}{currency_text}{move_text}",
         loc="left",
@@ -153,16 +142,7 @@ async def render_google_finance_chart(
         fontweight="bold",
         pad=16,
     )
-    ax.text(
-        0.0,
-        1.015,
-        timeframe.upper(),
-        transform=ax.transAxes,
-        ha="left",
-        va="bottom",
-        color=muted,
-        fontsize=8,
-    )
+    ax.text(0.0, 1.015, timeframe.upper(), transform=ax.transAxes, ha="left", va="bottom", color=muted, fontsize=8)
     if prev_close is not None and prev_close > 0:
         ax.text(
             0.99,
@@ -188,7 +168,29 @@ async def render_chart(
     symbol: str,
     timeframe: str,
     advanced: bool = False,
+    *,
+    prev_close: float | None = None,
+    price: float | None = None,
+    currency: str | None = None,
+    change_percent: float | None = None,
 ) -> io.BytesIO:
+    """Render the configured chart style.
+
+    When Google Finance is enabled, its normalized price series is rendered in
+    the Google Finance-style line/area format. Otherwise the existing technical
+    candlestick renderer remains available.
+    """
+    if settings.google_finance_enabled:
+        return await render_google_finance_chart(
+            df,
+            symbol,
+            timeframe,
+            prev_close=prev_close,
+            price=price,
+            currency=currency,
+            change_percent=change_percent,
+        )
+
     work = _clean_ohlcv(df)
     enriched = add_advanced_indicators(work) if advanced else add_basic_indicators(work)
 
@@ -198,14 +200,11 @@ async def render_chart(
     macd_panel = rsi_panel + 1
 
     plots = []
-
-    # Price panel: trend overlays.
     if "EMA20" in enriched:
         plots.append(_line(enriched["EMA20"], 0, "#38bdf8", 1.15))
     if "EMA50" in enriched:
         plots.append(_line(enriched["EMA50"], 0, "#f59e0b", 1.15))
 
-    # Advanced price overlay: volatility bands.
     if advanced:
         if "BB_UPPER" in enriched:
             plots.append(_line(enriched["BB_UPPER"], 0, "#a78bfa", 0.9))
