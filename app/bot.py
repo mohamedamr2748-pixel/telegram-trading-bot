@@ -173,7 +173,9 @@ async def account(message: Message) -> None:
         await message.answer(
             "👤 <b>MY ACCOUNT</b>\n\n"
             "<b>PLAN</b>\n"
-            f"Plan              <b>{user.plan.title()}</b>\n\n"
+            f"{user.plan.title()}\n\n"
+            "<b>ACCOUNT</b>\n"
+            f"Joined            <code>{user.created_at.strftime('%d %b %Y')}</code>\n\n"
             "<b>PORTFOLIO</b>\n"
             f"Watchlist         <code>{watch_count} / 10</code>\n"
             f"Price alerts      <code>{alerts} / 3</code>\n"
@@ -189,6 +191,8 @@ async def account(message: Message) -> None:
             f"Why               <code>{usage.get('why', 0)} / 3</code>\n"
             f"Advanced          <code>{usage.get('advanced', 0)} / 3</code>"
         )
+
+
 @router.message(Command("price"))
 async def price(message: Message) -> None:
     parts = message.text.split(maxsplit=1) if message.text else []
