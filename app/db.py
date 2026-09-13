@@ -9,6 +9,10 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from config import settings
 
 
+OWNER_USERNAME = "moegy_1"
+OWNER_PLAN = "unlimited"
+
+
 def _normalise_database_url(url: str) -> str:
     if url.startswith("postgres://"):
         return url.replace("postgres://", "postgresql+asyncpg://", 1)
@@ -116,12 +120,26 @@ async def init_db() -> None:
 async def get_or_create_user(session: AsyncSession, telegram_id: int, username: str | None) -> User:
     result = await session.execute(select(User).where(User.telegram_id == telegram_id))
     user = result.scalar_one_or_none()
+    normalized_username = username.strip().lstrip("@").lower() if username else None
+    is_owner = normalized_username == OWNER_USERNAME
+
     if user:
+        changed = False
         if username and user.username != username:
             user.username = username
+            changed = True
+        if is_owner and user.plan != OWNER_PLAN:
+            user.plan = OWNER_PLAN
+            changed = True
+        if changed:
             await session.commit()
         return user
-    user = User(telegram_id=telegram_id, username=username)
+
+    user = User(
+        telegram_id=telegram_id,
+        username=username,
+        plan=OWNER_PLAN if is_owner else "free",
+    )
     session.add(user)
     await session.flush()
     session.add(Watchlist(user_id=user.id, name="My Watchlist"))
