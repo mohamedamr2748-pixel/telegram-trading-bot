@@ -170,26 +170,27 @@ async def account(message: Message) -> None:
             )
         )
         usage = dict(usage_result.all())
+
         await message.answer(
             "👤 <b>MY ACCOUNT</b>\n\n"
             "<b>PLAN</b>\n"
             f"{user.plan.title()}\n\n"
             "<b>ACCOUNT</b>\n"
-            f"Joined            <code>{user.created_at.strftime('%d %b %Y')}</code>\n\n"
+            f"Joined: {user.created_at.strftime('%d %b %Y')}\n\n"
             "<b>PORTFOLIO</b>\n"
-            f"Watchlist         <code>{watch_count} / 10</code>\n"
-            f"Price alerts      <code>{alerts} / 3</code>\n"
-            f"Smart alerts      <code>{smart} / 3</code>\n\n"
+            f"Watchlist: {watch_count}/10\n"
+            f"Price alerts: {alerts}/3\n"
+            f"Smart alerts: {smart}/3\n\n"
             "<b>SETTINGS</b>\n"
-            f"Timezone          <code>{user.timezone}</code>\n\n"
+            f"Timezone: {user.timezone}\n\n"
             "<b>USAGE • TODAY</b>\n"
-            f"Price             <code>{usage.get('price', 0)} / 50</code>\n"
-            f"Charts            <code>{usage.get('chart', 0)} / 10</code>\n"
-            f"News              <code>{usage.get('news', 0)} / 30</code>\n"
-            f"Scanner           <code>{usage.get('scanner', 0)} / 5</code>\n"
-            f"Brief             <code>{usage.get('brief', 0)} / 1</code>\n"
-            f"Why               <code>{usage.get('why', 0)} / 3</code>\n"
-            f"Advanced          <code>{usage.get('advanced', 0)} / 3</code>"
+            f"Price: {usage.get('price', 0)}/50\n"
+            f"Charts: {usage.get('chart', 0)}/10\n"
+            f"News: {usage.get('news', 0)}/30\n"
+            f"Scanner: {usage.get('scanner', 0)}/5\n"
+            f"Brief: {usage.get('brief', 0)}/1\n"
+            f"Why: {usage.get('why', 0)}/3\n"
+            f"Advanced: {usage.get('advanced', 0)}/3"
         )
 
 
