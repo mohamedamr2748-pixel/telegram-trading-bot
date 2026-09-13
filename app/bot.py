@@ -189,7 +189,6 @@ async def account(message: Message) -> None:
             f"Why               <code>{usage.get('why', 0)} / 3</code>\n"
             f"Advanced          <code>{usage.get('advanced', 0)} / 3</code>"
         )
-
 @router.message(Command("price"))
 async def price(message: Message) -> None:
     parts = message.text.split(maxsplit=1) if message.text else []
