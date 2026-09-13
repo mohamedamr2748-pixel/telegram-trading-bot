@@ -26,20 +26,10 @@ class MarketProvider(ABC):
 
 
 class GoogleFinanceProvider(MarketProvider):
-    """Google Finance public-page data exposed through Crawlora's Google Finance API."""
-
     name = "google_finance"
-
     _WINDOWS = {
-        "1d": "1D",
-        "5d": "5D",
-        "1mo": "1M",
-        "3mo": "3M",
-        "6mo": "6M",
-        "ytd": "YTD",
-        "1y": "1Y",
-        "5y": "5Y",
-        "max": "MAX",
+        "1d": "1D", "5d": "5D", "1mo": "1M", "3mo": "3M", "6mo": "6M",
+        "ytd": "YTD", "1y": "1Y", "5y": "5Y", "max": "MAX",
     }
 
     def __init__(self) -> None:
@@ -118,7 +108,6 @@ class GoogleFinanceProvider(MarketProvider):
         user_symbol = symbol.strip().upper()
         identifier = await self.resolve_symbol(user_symbol)
         data = await self._request(f"quote/{quote(identifier, safe=':,-.')}")
-
         instrument = data.get("instrument") if isinstance(data.get("instrument"), dict) else data
         tickers = instrument.get("tickers") if isinstance(instrument, dict) else None
         if not isinstance(tickers, list):
@@ -128,7 +117,6 @@ class GoogleFinanceProvider(MarketProvider):
         price = self._first_numeric(instrument, ("price",), ("current_price",)) or self._first_numeric(last_ticker, ("price",))
         if price is None or price <= 0:
             raise ValueError(f"Google Finance returned no valid price for {identifier}")
-
         previous = self._first_numeric(instrument, ("previous_close",), ("key_stats", "previous_close"), ("previousClose",))
         change = self._first_numeric(instrument, ("change",))
         change_pct = self._first_numeric(instrument, ("change_percent",), ("changePercent",))
@@ -181,7 +169,6 @@ class GoogleFinanceProvider(MarketProvider):
         if window is None:
             raise ValueError(f"Unsupported Google Finance chart window: {period}")
         data = await self._request(f"chart/{quote(identifier, safe=':,-.')}", {"window": window})
-
         candidates: list[object] = []
         for key in ("tickers", "points", "chart", "series", "data"):
             value = data.get(key)
@@ -196,7 +183,6 @@ class GoogleFinanceProvider(MarketProvider):
                         break
             if candidates:
                 break
-
         rows: list[dict] = []
         for point in candidates:
             if not isinstance(point, dict):
@@ -209,12 +195,11 @@ class GoogleFinanceProvider(MarketProvider):
                 continue
             try:
                 timestamp = pd.to_datetime(raw_time, utc=True)
-                price = float(raw_price)
+                point_price = float(raw_price)
             except (TypeError, ValueError):
                 continue
             volume = to_float(point.get("volume"), 0.0)
-            rows.append({"Date": timestamp, "Open": price, "High": price, "Low": price, "Close": price, "Volume": volume})
-
+            rows.append({"Date": timestamp, "Open": point_price, "High": point_price, "Low": point_price, "Close": point_price, "Volume": volume})
         if not rows:
             raise ValueError(f"No chart data returned for {identifier}")
         frame = pd.DataFrame(rows).set_index("Date").sort_index()
@@ -223,6 +208,21 @@ class GoogleFinanceProvider(MarketProvider):
 
 class YFinanceProvider(MarketProvider):
     name = "yfinance"
+
+    _FOREX_YF_SYMBOLS = {
+        "EURUSD": "EURUSD=X",
+        "GBPUSD": "GBPUSD=X",
+        "USDJPY": "USDJPY=X",
+        "AUDUSD": "AUDUSD=X",
+        "USDCAD": "USDCAD=X",
+        "USDCHF": "USDCHF=X",
+        "NZDUSD": "NZDUSD=X",
+    }
+
+    @classmethod
+    def _history_symbol(cls, symbol: str) -> str:
+        normalized = symbol.strip().upper()
+        return cls._FOREX_YF_SYMBOLS.get(normalized, normalized)
 
     @staticmethod
     def _classify(symbol: str) -> str:
@@ -243,7 +243,8 @@ class YFinanceProvider(MarketProvider):
 
     async def get_quote(self, symbol: str) -> MarketQuote:
         def fetch() -> MarketQuote:
-            ticker = yf.Ticker(symbol)
+            ticker_symbol = self._history_symbol(symbol)
+            ticker = yf.Ticker(ticker_symbol)
             try:
                 info = ticker.fast_info
                 price = to_float(getattr(info, "last_price", None))
@@ -296,24 +297,21 @@ class YFinanceProvider(MarketProvider):
             change = price - previous if previous else None
             change_pct = (change / previous * 100) if previous else None
             return MarketQuote(
-                symbol=symbol.upper(),
-                asset_class=self._classify(symbol),
-                price=price,
-                open=open_, high=high, low=low, volume=volume,
-                change=change, change_percent=change_pct,
-                timestamp=ts, source=self.name, market_status=market_state,
+                symbol=symbol.upper(), asset_class=self._classify(symbol), price=price,
+                open=open_, high=high, low=low, volume=volume, change=change,
+                change_percent=change_pct, timestamp=ts, source=self.name, market_status=market_state,
                 previous_close=previous or None, year_high=year_high, year_low=year_low,
                 market_cap=market_cap, pe_ratio=pe_ratio, dividend_yield=dividend_yield,
                 eps=eps, pre_market_price=pre_market, post_market_price=post_market,
             )
-
         return await asyncio.to_thread(fetch)
 
     async def get_history(self, symbol: str, period: str = "1mo", interval: str = "1d") -> pd.DataFrame:
         def fetch() -> pd.DataFrame:
-            df = yf.Ticker(symbol).history(period=period, interval=interval, auto_adjust=False)
+            yf_symbol = self._history_symbol(symbol)
+            df = yf.Ticker(yf_symbol).history(period=period, interval=interval, auto_adjust=False)
             if df.empty:
-                raise ValueError(f"No historical data found for {symbol}")
+                raise ValueError(f"No historical data found for {symbol} (Yahoo symbol: {yf_symbol})")
             return df
         return await asyncio.to_thread(fetch)
 
@@ -327,7 +325,6 @@ class BiQuoteProvider(MarketProvider):
             response = await client.get(f"{self.base_url}/{symbol.upper()}", params={"allowStale": "true"})
             response.raise_for_status()
             data = response.json()
-
         timestamp = datetime.now(timezone.utc)
         raw_timestamp = data.get("timestamp") or data.get("time")
         if isinstance(raw_timestamp, str):
@@ -335,7 +332,6 @@ class BiQuoteProvider(MarketProvider):
                 timestamp = datetime.fromisoformat(raw_timestamp.replace("Z", "+00:00"))
             except ValueError:
                 pass
-
         price = to_float(data.get("mid") or data.get("price"))
         if price <= 0:
             raise ValueError(f"No valid price returned for {symbol}")
@@ -380,7 +376,6 @@ class MarketService:
             if not self.google.enabled:
                 raise RuntimeError("Google Finance is enabled but GOOGLE_FINANCE_API_KEY is missing")
             return await self.google.get_quote(symbol)
-
         errors: list[str] = []
         providers = [self.bq, self.yf] if self._prefer_biquote(symbol) and settings.biquote_enabled else [self.yf, self.bq]
         for provider in providers:
