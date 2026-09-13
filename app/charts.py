@@ -142,6 +142,30 @@ def _pre_market(quote: MarketQuote | None) -> str:
     return f"{_fmt_value(quote.pre_market_price)}  ({_fmt_percent(move)})" if move is not None else _fmt_value(quote.pre_market_price)
 
 
+async def _correct_yfinance_previous_close(symbol: str, quote: MarketQuote | None, timeframe: str) -> float | None:
+    """Use the completed daily session as the authoritative previous close for 1D charts.
+
+    yfinance fast_info can occasionally expose a stale/incorrect previous_close while
+    the intraday quote itself is current. For a 1D chart, the prior completed daily
+    candle is the correct reference for daily performance and chart colouring.
+    """
+    if quote is None or quote.source != "yfinance" or not timeframe.upper().startswith("1D"):
+        return quote.previous_close if quote else None
+    try:
+        from app.market import MarketService
+        daily = await MarketService().get_history(symbol, period="5d", interval="1d")
+        if "Close" not in daily.columns:
+            return quote.previous_close
+        daily = daily.copy()
+        daily["Close"] = pd.to_numeric(daily["Close"], errors="coerce")
+        daily = daily.dropna(subset=["Close"]).sort_index()
+        if len(daily) >= 2:
+            return float(daily["Close"].iloc[-2])
+    except Exception:
+        pass
+    return quote.previous_close
+
+
 async def render_google_finance_chart(
     df: pd.DataFrame,
     symbol: str,
@@ -173,9 +197,16 @@ async def render_google_finance_chart(
 
     if quote is not None:
         price = quote.price if price is None else price
-        change_percent = quote.change_percent if change_percent is None else change_percent
-        prev_close = quote.previous_close if prev_close is None else prev_close
-        currency = currency or "USD" if quote.asset_class in {"stock", "index", "commodity", "metal", "forex", "market"} else currency
+        currency = currency or ("USD" if quote.asset_class in {"stock", "index", "commodity", "metal", "forex", "market"} else None)
+
+        corrected_previous = await _correct_yfinance_previous_close(symbol, quote, timeframe)
+        if prev_close is None or quote.source == "yfinance":
+            prev_close = corrected_previous
+
+        if prev_close and prev_close > 0:
+            change_percent = ((price if price is not None else quote.price) / prev_close - 1.0) * 100.0
+        elif change_percent is None:
+            change_percent = quote.change_percent
 
     display_index = _display_index(work.index, symbol)
     series = pd.Series(work["Close"].to_numpy(dtype=float), index=display_index)
@@ -263,7 +294,16 @@ async def render_chart(
     quote: MarketQuote | None = None,
 ) -> io.BytesIO:
     if not advanced:
-        return await render_google_finance_chart(df, symbol, timeframe, prev_close=prev_close, price=price, currency=currency, change_percent=change_percent, quote=quote)
+        return await render_google_finance_chart(
+            df,
+            symbol,
+            timeframe,
+            prev_close=prev_close,
+            price=price,
+            currency=currency,
+            change_percent=change_percent,
+            quote=quote,
+        )
 
     work = _clean_ohlcv(df)
     enriched = add_advanced_indicators(work)
@@ -283,16 +323,43 @@ async def render_chart(
     if "BB_LOWER" in enriched:
         plots.append(_line(enriched["BB_LOWER"], 0, "#a78bfa", 0.9))
     if "RSI14" in enriched:
-        plots.extend([_line(enriched["RSI14"], rsi_panel, "#22d3ee", 1.05), _line(pd.Series(70.0, index=enriched.index), rsi_panel, "#ef4444", 0.65, "--"), _line(pd.Series(30.0, index=enriched.index), rsi_panel, "#22c55e", 0.65, "--"), _line(pd.Series(50.0, index=enriched.index), rsi_panel, "#64748b", 0.5, ":")])
+        plots.extend([
+            _line(enriched["RSI14"], rsi_panel, "#22d3ee", 1.05),
+            _line(pd.Series(70.0, index=enriched.index), rsi_panel, "#ef4444", 0.65, "--"),
+            _line(pd.Series(30.0, index=enriched.index), rsi_panel, "#22c55e", 0.65, "--"),
+            _line(pd.Series(50.0, index=enriched.index), rsi_panel, "#64748b", 0.5, ":"),
+        ])
     if {"MACD", "MACD_SIGNAL"}.issubset(enriched.columns):
         histogram = enriched["MACD"] - enriched["MACD_SIGNAL"]
-        plots.extend([mpf.make_addplot(histogram.clip(lower=0), type="bar", panel=macd_panel, color="#22c55e", alpha=0.55, width=0.7), mpf.make_addplot(histogram.clip(upper=0), type="bar", panel=macd_panel, color="#ef4444", alpha=0.55, width=0.7), _line(enriched["MACD"], macd_panel, "#60a5fa", 1.0), _line(enriched["MACD_SIGNAL"], macd_panel, "#f59e0b", 1.0), _line(pd.Series(0.0, index=enriched.index), macd_panel, "#64748b", 0.5, "--")])
+        plots.extend([
+            mpf.make_addplot(histogram.clip(lower=0), type="bar", panel=macd_panel, color="#22c55e", alpha=0.55, width=0.7),
+            mpf.make_addplot(histogram.clip(upper=0), type="bar", panel=macd_panel, color="#ef4444", alpha=0.55, width=0.7),
+            _line(enriched["MACD"], macd_panel, "#60a5fa", 1.0),
+            _line(enriched["MACD_SIGNAL"], macd_panel, "#f59e0b", 1.0),
+            _line(pd.Series(0.0, index=enriched.index), macd_panel, "#64748b", 0.5, "--"),
+        ])
     ratios = [6]
     if has_volume:
         ratios.append(1.8)
     ratios.extend([2, 2])
     buf = io.BytesIO()
-    fig, _ = mpf.plot(enriched, type="candle", style=_CHART_STYLE, addplot=plots or None, volume=has_volume, volume_panel=volume_panel if has_volume else 0, panel_ratios=ratios, figsize=(12.5, 8.8), title=f"{symbol.upper()}  •  {timeframe}  •  Advanced", ylabel="Price", ylabel_lower="Volume" if has_volume else "", xrotation=0, datetime_format="%d %b\n%H:%M", tight_layout=True, returnfig=True)
+    fig, _ = mpf.plot(
+        enriched,
+        type="candle",
+        style=_CHART_STYLE,
+        addplot=plots or None,
+        volume=has_volume,
+        volume_panel=volume_panel if has_volume else 0,
+        panel_ratios=ratios,
+        figsize=(12.5, 8.8),
+        title=f"{symbol.upper()}  •  {timeframe}  •  Advanced",
+        ylabel="Price",
+        ylabel_lower="Volume" if has_volume else "",
+        xrotation=0,
+        datetime_format="%d %b\n%H:%M",
+        tight_layout=True,
+        returnfig=True,
+    )
     fig.suptitle(f"{symbol.upper()}  •  {timeframe}  •  Advanced", x=0.055, y=0.985, ha="left", fontsize=14, fontweight="bold", color="#f8fafc")
     fig.subplots_adjust(top=0.94, left=0.05, right=0.96, bottom=0.07, hspace=0.08)
     fig.text(0.055, 0.018, "EMA20 / EMA50  •  Bollinger Bands  •  RSI14  •  MACD", ha="left", va="bottom", fontsize=7.5, color="#94a3b8")
