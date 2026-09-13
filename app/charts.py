@@ -12,6 +12,9 @@ import pandas as pd
 from app.domain import MarketQuote
 from app.indicators import add_advanced_indicators
 
+_STANDARD_FIGSIZE = (14.0, 10.5)
+_STANDARD_DPI = 240
+_ADVANCED_DPI = 220
 
 _CHART_STYLE = mpf.make_mpf_style(
     base_mpf_style="nightclouds",
@@ -21,7 +24,15 @@ _CHART_STYLE = mpf.make_mpf_style(
     gridstyle=":",
     gridaxis="both",
     y_on_right=True,
-    rc={"axes.labelsize": 9, "axes.titlesize": 13, "xtick.labelsize": 8, "ytick.labelsize": 8, "font.size": 9},
+    rc={
+        "axes.labelsize": 10,
+        "axes.titlesize": 15,
+        "xtick.labelsize": 9,
+        "ytick.labelsize": 9,
+        "font.size": 10,
+        "figure.dpi": _ADVANCED_DPI,
+        "savefig.dpi": _ADVANCED_DPI,
+    },
 )
 
 
@@ -143,12 +154,7 @@ def _pre_market(quote: MarketQuote | None) -> str:
 
 
 async def _correct_yfinance_previous_close(symbol: str, quote: MarketQuote | None, timeframe: str) -> float | None:
-    """Use the completed daily session as the authoritative previous close for 1D charts.
-
-    yfinance fast_info can occasionally expose a stale/incorrect previous_close while
-    the intraday quote itself is current. For a 1D chart, the prior completed daily
-    candle is the correct reference for daily performance and chart colouring.
-    """
+    """Use the completed daily session as the authoritative previous close for 1D charts."""
     if quote is None or quote.source != "yfinance" or not timeframe.upper().startswith("1D"):
         return quote.previous_close if quote else None
     try:
@@ -198,11 +204,9 @@ async def render_google_finance_chart(
     if quote is not None:
         price = quote.price if price is None else price
         currency = currency or ("USD" if quote.asset_class in {"stock", "index", "commodity", "metal", "forex", "market"} else None)
-
         corrected_previous = await _correct_yfinance_previous_close(symbol, quote, timeframe)
         if prev_close is None or quote.source == "yfinance":
             prev_close = corrected_previous
-
         if prev_close and prev_close > 0:
             change_percent = ((price if price is not None else quote.price) / prev_close - 1.0) * 100.0
         elif change_percent is None:
@@ -218,7 +222,7 @@ async def render_google_finance_chart(
     period_perf = _period_performance(series, timeframe, change_percent)
     stats = _session_stats(work, symbol)
     currency_text = f" {currency}" if currency else ""
-    fig, ax = plt.subplots(figsize=(12.8, 9.65), dpi=160, facecolor="#202124")
+    fig, ax = plt.subplots(figsize=_STANDARD_FIGSIZE, dpi=_STANDARD_DPI, facecolor="#202124")
     ax.set_facecolor("#3c4043")
     x = series.index.to_pydatetime()
     y = series.to_numpy(dtype=float)
@@ -235,18 +239,18 @@ async def render_google_finance_chart(
     else:
         line_color = "#f28b82"
 
-    ax.plot(x, y, linewidth=2.4, color=line_color, solid_capstyle="round", zorder=4)
-    ax.fill_between(x, y, chart_bottom, color=line_color, alpha=0.10, zorder=1)
+    ax.plot(x, y, linewidth=2.8, color=line_color, solid_capstyle="round", solid_joinstyle="round", antialiased=True, zorder=4)
+    ax.fill_between(x, y, chart_bottom, color=line_color, alpha=0.10, zorder=1, antialiased=True)
     if previous is not None:
-        ax.axhline(previous, linewidth=1.0, linestyle=(0, (1.5, 4)), color="#c3c7cf", alpha=0.7, zorder=2)
-        ax.text(1.005, previous, f"Prev\nclose\n{previous:.6g}", transform=ax.get_yaxis_transform(), ha="left", va="center", fontsize=8, color="#d4d7dd", linespacing=1.05)
-    ax.scatter([x[-1]], [y[-1]], s=42, color=line_color, edgecolor="#3c4043", linewidth=1.2, zorder=6)
+        ax.axhline(previous, linewidth=1.1, linestyle=(0, (1.5, 4)), color="#c3c7cf", alpha=0.7, zorder=2, antialiased=True)
+        ax.text(1.005, previous, f"Prev\nclose\n{previous:.6g}", transform=ax.get_yaxis_transform(), ha="left", va="center", fontsize=9, color="#d4d7dd", linespacing=1.05)
+    ax.scatter([x[-1]], [y[-1]], s=52, color=line_color, edgecolor="#3c4043", linewidth=1.4, zorder=6, antialiased=True)
     ax.set_ylim(chart_bottom, chart_top)
-    ax.grid(axis="y", color="#5f6368", linestyle="-", linewidth=0.7, alpha=0.42)
+    ax.grid(axis="y", color="#5f6368", linestyle="-", linewidth=0.75, alpha=0.42)
     ax.grid(axis="x", visible=False)
     for spine in ax.spines.values():
         spine.set_visible(False)
-    ax.tick_params(colors="#d0d3da", labelsize=8, length=0, pad=8)
+    ax.tick_params(colors="#d0d3da", labelsize=9, length=0, pad=9)
     ax.yaxis.tick_right()
     locator = mdates.AutoDateLocator(minticks=4, maxticks=6)
     ax.xaxis.set_major_locator(locator)
@@ -254,10 +258,10 @@ async def render_google_finance_chart(
     price_line = f"{last_price:.6g}{currency_text}"
     if change_percent is not None:
         price_line += f"  {change_percent:+.2f}%"
-    ax.set_title(f"{symbol.upper()}\n{price_line}", loc="left", color="#f8fafc", fontsize=18, fontweight="bold", pad=14, linespacing=1.25)
-    ax.text(1.0, 1.075, timeframe.upper(), transform=ax.transAxes, ha="right", va="bottom", color="#b8bdc7", fontsize=8, fontweight="bold")
+    ax.set_title(f"{symbol.upper()}\n{price_line}", loc="left", color="#f8fafc", fontsize=20, fontweight="bold", pad=16, linespacing=1.25)
+    ax.text(1.0, 1.075, timeframe.upper(), transform=ax.transAxes, ha="right", va="bottom", color="#b8bdc7", fontsize=9, fontweight="bold")
 
-    fig.subplots_adjust(left=0.035, right=0.90, top=0.79, bottom=0.39)
+    fig.subplots_adjust(left=0.035, right=0.89, top=0.79, bottom=0.39)
     rows = [
         ("Open", stats["Open"], "High", stats["High"]),
         ("Low", stats["Low"], "Volume", stats["Volume"]),
@@ -269,13 +273,13 @@ async def render_google_finance_chart(
     ]
     y_positions = [0.332, 0.282, 0.232, 0.182, 0.132, 0.082, 0.032]
     for ypos, (l1, v1, l2, v2) in zip(y_positions, rows):
-        fig.text(0.055, ypos, l1, ha="left", va="center", fontsize=8.0, color="#9aa0a6")
-        fig.text(0.20, ypos, v1, ha="left", va="center", fontsize=9.0, fontweight="bold", color="#f8fafc")
-        fig.text(0.51, ypos, l2, ha="left", va="center", fontsize=8.0, color="#9aa0a6")
-        fig.text(0.66, ypos, v2, ha="left", va="center", fontsize=9.0, fontweight="bold", color="#f8fafc")
+        fig.text(0.055, ypos, l1, ha="left", va="center", fontsize=9.0, color="#9aa0a6")
+        fig.text(0.20, ypos, v1, ha="left", va="center", fontsize=10.0, fontweight="bold", color="#f8fafc")
+        fig.text(0.51, ypos, l2, ha="left", va="center", fontsize=9.0, color="#9aa0a6")
+        fig.text(0.66, ypos, v2, ha="left", va="center", fontsize=10.0, fontweight="bold", color="#f8fafc")
 
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=160, bbox_inches="tight", facecolor=fig.get_facecolor())
+    fig.savefig(buf, format="png", dpi=_STANDARD_DPI, bbox_inches="tight", pad_inches=0.08, facecolor=fig.get_facecolor(), edgecolor="none", pil_kwargs={"compress_level": 1})
     plt.close(fig)
     buf.seek(0)
     return buf
@@ -294,32 +298,22 @@ async def render_chart(
     quote: MarketQuote | None = None,
 ) -> io.BytesIO:
     if not advanced:
-        return await render_google_finance_chart(
-            df,
-            symbol,
-            timeframe,
-            prev_close=prev_close,
-            price=price,
-            currency=currency,
-            change_percent=change_percent,
-            quote=quote,
-        )
+        return await render_google_finance_chart(df, symbol, timeframe, prev_close=prev_close, price=price, currency=currency, change_percent=change_percent, quote=quote)
 
     work = _clean_ohlcv(df)
     enriched = add_advanced_indicators(work)
     has_volume = "Volume" in enriched.columns
-    volume_panel = 1 if has_volume else None
+    volume_panel = 1 if has_volume else 0
     rsi_panel = 2 if has_volume else 1
-    macd_panel = rsi_panel + 1
+    macd_panel = 3 if has_volume else 2
     plots = []
+
     if "EMA20" in enriched:
-        plots.append(_line(enriched["EMA20"], 0, "#38bdf8", 1.15))
+        plots.append(_line(enriched["EMA20"], 0, "#fbbf24", 1.15))
     if "EMA50" in enriched:
-        plots.append(_line(enriched["EMA50"], 0, "#f59e0b", 1.15))
+        plots.append(_line(enriched["EMA50"], 0, "#60a5fa", 1.15))
     if "BB_UPPER" in enriched:
         plots.append(_line(enriched["BB_UPPER"], 0, "#a78bfa", 0.9))
-    if "BB_MID" in enriched:
-        plots.append(_line(enriched["BB_MID"], 0, "#94a3b8", 0.7, "--"))
     if "BB_LOWER" in enriched:
         plots.append(_line(enriched["BB_LOWER"], 0, "#a78bfa", 0.9))
     if "RSI14" in enriched:
@@ -338,11 +332,11 @@ async def render_chart(
             _line(enriched["MACD_SIGNAL"], macd_panel, "#f59e0b", 1.0),
             _line(pd.Series(0.0, index=enriched.index), macd_panel, "#64748b", 0.5, "--"),
         ])
+
     ratios = [6]
     if has_volume:
         ratios.append(1.8)
     ratios.extend([2, 2])
-    buf = io.BytesIO()
     fig, _ = mpf.plot(
         enriched,
         type="candle",
@@ -351,7 +345,7 @@ async def render_chart(
         volume=has_volume,
         volume_panel=volume_panel if has_volume else 0,
         panel_ratios=ratios,
-        figsize=(12.5, 8.8),
+        figsize=(14.0, 9.8),
         title=f"{symbol.upper()}  •  {timeframe}  •  Advanced",
         ylabel="Price",
         ylabel_lower="Volume" if has_volume else "",
@@ -359,11 +353,14 @@ async def render_chart(
         datetime_format="%d %b\n%H:%M",
         tight_layout=True,
         returnfig=True,
+        warn_too_much_data=10000,
     )
-    fig.suptitle(f"{symbol.upper()}  •  {timeframe}  •  Advanced", x=0.055, y=0.985, ha="left", fontsize=14, fontweight="bold", color="#f8fafc")
+    fig.set_dpi(_ADVANCED_DPI)
+    fig.suptitle(f"{symbol.upper()}  •  {timeframe}  •  Advanced", x=0.055, y=0.985, ha="left", fontsize=15, fontweight="bold", color="#f8fafc")
     fig.subplots_adjust(top=0.94, left=0.05, right=0.96, bottom=0.07, hspace=0.08)
-    fig.text(0.055, 0.018, "EMA20 / EMA50  •  Bollinger Bands  •  RSI14  •  MACD", ha="left", va="bottom", fontsize=7.5, color="#94a3b8")
-    fig.savefig(buf, format="png", dpi=160, bbox_inches="tight", facecolor=fig.get_facecolor())
+    fig.text(0.055, 0.018, "EMA20 / EMA50  •  Bollinger Bands  •  RSI14  •  MACD", ha="left", va="bottom", fontsize=8.0, color="#94a3b8")
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=_ADVANCED_DPI, bbox_inches="tight", pad_inches=0.08, facecolor=fig.get_facecolor(), edgecolor="none", pil_kwargs={"compress_level": 1})
     plt.close(fig)
     buf.seek(0)
     return buf
