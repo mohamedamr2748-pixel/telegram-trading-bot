@@ -154,7 +154,6 @@ def _pre_market(quote: MarketQuote | None) -> str:
 
 
 async def _correct_yfinance_previous_close(symbol: str, quote: MarketQuote | None, timeframe: str) -> float | None:
-    """Use the completed daily session as the authoritative previous close for 1D charts."""
     if quote is None or quote.source != "yfinance" or not timeframe.upper().startswith("1D"):
         return quote.previous_close if quote else None
     try:
@@ -261,24 +260,24 @@ async def render_google_finance_chart(
     ax.set_title(f"{symbol.upper()}\n{price_line}", loc="left", color="#f8fafc", fontsize=20, fontweight="bold", pad=16, linespacing=1.25)
     ax.text(1.0, 1.075, timeframe.upper(), transform=ax.transAxes, ha="right", va="bottom", color="#b8bdc7", fontsize=9, fontweight="bold")
 
-    fig.subplots_adjust(left=0.035, right=0.89, top=0.79, bottom=0.39)
+    # Three compact columns, three rows, matching the reference layout.
     rows = [
-        ("Open", stats["Open"], "High", stats["High"]),
-        ("Low", stats["Low"], "Volume", stats["Volume"]),
-        ("Period", _fmt_percent(period_perf), "52W range", f"{_fmt_value(quote.year_low) if quote else 'n/a'} – {_fmt_value(quote.year_high) if quote else 'n/a'}"),
-        ("Market", _status_text(quote), "Updated", quote.timestamp.strftime("%d %b %Y %H:%M UTC") if quote else "n/a"),
-        ("Pre-market", _pre_market(quote), "After hours", _after_hours(quote)),
-        ("Market cap", _fmt_value(quote.market_cap) if quote else "n/a", "P/E", _fmt_meta(quote.pe_ratio) if quote else "n/a"),
-        ("Dividend", _fmt_meta(quote.dividend_yield, percent=True) if quote else "n/a", "EPS", _fmt_meta(quote.eps) if quote else "n/a"),
+        [("Open", stats["Open"]), ("Mkt cap", _fmt_value(quote.market_cap) if quote else "n/a"), ("Dividend", _fmt_meta(quote.dividend_yield, percent=True) if quote else "n/a")],
+        [("High", stats["High"]), ("P/E ratio", _fmt_meta(quote.pe_ratio) if quote else "n/a"), ("After hours", _after_hours(quote))],
+        [("Low", stats["Low"]), ("52-wk high", _fmt_value(quote.year_high) if quote else "n/a"), ("52-wk low", _fmt_value(quote.year_low) if quote else "n/a")],
     ]
-    y_positions = [0.332, 0.282, 0.232, 0.182, 0.132, 0.082, 0.032]
-    for ypos, (l1, v1, l2, v2) in zip(y_positions, rows):
-        fig.text(0.055, ypos, l1, ha="left", va="center", fontsize=9.0, color="#9aa0a6")
-        fig.text(0.20, ypos, v1, ha="left", va="center", fontsize=10.0, fontweight="bold", color="#f8fafc")
-        fig.text(0.51, ypos, l2, ha="left", va="center", fontsize=9.0, color="#9aa0a6")
-        fig.text(0.66, ypos, v2, ha="left", va="center", fontsize=10.0, fontweight="bold", color="#f8fafc")
+    y_positions = [0.285, 0.235, 0.185]
+    x_positions = [0.055, 0.37, 0.70]
+    for ypos, row in zip(y_positions, rows):
+        for xpos, (label, value) in zip(x_positions, row):
+            fig.text(xpos, ypos, label, ha="left", va="center", fontsize=9.0, color="#9aa0a6")
+            fig.text(xpos + 0.14, ypos, value, ha="left", va="center", fontsize=10.0, fontweight="bold", color="#f8fafc")
+
+    # Keep the statistics block visually separated from the chart.
+    fig.text(0.055, 0.325, "SESSION / FUNDAMENTALS", ha="left", va="center", fontsize=7.5, fontweight="bold", color="#6f7785")
 
     buf = io.BytesIO()
+    fig.subplots_adjust(left=0.035, right=0.89, top=0.79, bottom=0.34)
     fig.savefig(buf, format="png", dpi=_STANDARD_DPI, bbox_inches="tight", pad_inches=0.08, facecolor=fig.get_facecolor(), edgecolor="none", pil_kwargs={"compress_level": 1})
     plt.close(fig)
     buf.seek(0)
@@ -317,44 +316,16 @@ async def render_chart(
     if "BB_LOWER" in enriched:
         plots.append(_line(enriched["BB_LOWER"], 0, "#a78bfa", 0.9))
     if "RSI14" in enriched:
-        plots.extend([
-            _line(enriched["RSI14"], rsi_panel, "#22d3ee", 1.05),
-            _line(pd.Series(70.0, index=enriched.index), rsi_panel, "#ef4444", 0.65, "--"),
-            _line(pd.Series(30.0, index=enriched.index), rsi_panel, "#22c55e", 0.65, "--"),
-            _line(pd.Series(50.0, index=enriched.index), rsi_panel, "#64748b", 0.5, ":"),
-        ])
+        plots.extend([_line(enriched["RSI14"], rsi_panel, "#22d3ee", 1.05), _line(pd.Series(70.0, index=enriched.index), rsi_panel, "#ef4444", 0.65, "--"), _line(pd.Series(30.0, index=enriched.index), rsi_panel, "#22c55e", 0.65, "--"), _line(pd.Series(50.0, index=enriched.index), rsi_panel, "#64748b", 0.5, ":")])
     if {"MACD", "MACD_SIGNAL"}.issubset(enriched.columns):
         histogram = enriched["MACD"] - enriched["MACD_SIGNAL"]
-        plots.extend([
-            mpf.make_addplot(histogram.clip(lower=0), type="bar", panel=macd_panel, color="#22c55e", alpha=0.55, width=0.7),
-            mpf.make_addplot(histogram.clip(upper=0), type="bar", panel=macd_panel, color="#ef4444", alpha=0.55, width=0.7),
-            _line(enriched["MACD"], macd_panel, "#60a5fa", 1.0),
-            _line(enriched["MACD_SIGNAL"], macd_panel, "#f59e0b", 1.0),
-            _line(pd.Series(0.0, index=enriched.index), macd_panel, "#64748b", 0.5, "--"),
-        ])
+        plots.extend([mpf.make_addplot(histogram.clip(lower=0), type="bar", panel=macd_panel, color="#22c55e", alpha=0.55, width=0.7), mpf.make_addplot(histogram.clip(upper=0), type="bar", panel=macd_panel, color="#ef4444", alpha=0.55, width=0.7), _line(enriched["MACD"], macd_panel, "#60a5fa", 1.0), _line(enriched["MACD_SIGNAL"], macd_panel, "#f59e0b", 1.0), _line(pd.Series(0.0, index=enriched.index), macd_panel, "#64748b", 0.5, "--")])
 
     ratios = [6]
     if has_volume:
         ratios.append(1.8)
     ratios.extend([2, 2])
-    fig, _ = mpf.plot(
-        enriched,
-        type="candle",
-        style=_CHART_STYLE,
-        addplot=plots or None,
-        volume=has_volume,
-        volume_panel=volume_panel if has_volume else 0,
-        panel_ratios=ratios,
-        figsize=(14.0, 9.8),
-        title=f"{symbol.upper()}  •  {timeframe}  •  Advanced",
-        ylabel="Price",
-        ylabel_lower="Volume" if has_volume else "",
-        xrotation=0,
-        datetime_format="%d %b\n%H:%M",
-        tight_layout=True,
-        returnfig=True,
-        warn_too_much_data=10000,
-    )
+    fig, _ = mpf.plot(enriched, type="candle", style=_CHART_STYLE, addplot=plots or None, volume=has_volume, volume_panel=volume_panel if has_volume else 0, panel_ratios=ratios, figsize=(14.0, 9.8), title=f"{symbol.upper()}  •  {timeframe}  •  Advanced", ylabel="Price", ylabel_lower="Volume" if has_volume else "", xrotation=0, datetime_format="%d %b\n%H:%M", tight_layout=True, returnfig=True, warn_too_much_data=10000)
     fig.set_dpi(_ADVANCED_DPI)
     fig.suptitle(f"{symbol.upper()}  •  {timeframe}  •  Advanced", x=0.055, y=0.985, ha="left", fontsize=15, fontweight="bold", color="#f8fafc")
     fig.subplots_adjust(top=0.94, left=0.05, right=0.96, bottom=0.07, hspace=0.08)
