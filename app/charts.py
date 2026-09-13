@@ -10,7 +10,6 @@ import mplfinance as mpf
 import pandas as pd
 
 from app.indicators import add_advanced_indicators, add_basic_indicators
-from config import settings
 
 
 _CHART_STYLE = mpf.make_mpf_style(
@@ -67,6 +66,17 @@ def _line(series: pd.Series, panel: int, color: str, width: float = 1.0, linesty
     )
 
 
+def _display_index(index: pd.DatetimeIndex, symbol: str) -> pd.DatetimeIndex:
+    """Use exchange-friendly local time for common US securities."""
+    upper = symbol.upper()
+    if upper.endswith("-USD") or upper in {"BTCUSD", "ETHUSD", "SOLUSD", "XRPUSD", "BNBUSD"}:
+        return index
+    try:
+        return index.tz_localize("UTC").tz_convert("America/New_York").tz_localize(None)
+    except TypeError:
+        return index
+
+
 async def render_google_finance_chart(
     df: pd.DataFrame,
     symbol: str,
@@ -76,9 +86,9 @@ async def render_google_finance_chart(
     currency: str | None = None,
     change_percent: float | None = None,
 ) -> io.BytesIO:
-    """Render a compact Google Finance-style chart from Google Finance price points."""
+    """Render a Google Finance-style price chart from our normalized market data."""
     if "Close" not in df.columns:
-        raise ValueError("Google Finance chart requires a Close/price series")
+        raise ValueError("Chart requires a Close/price series")
 
     work = df.copy()
     work.index = pd.to_datetime(work.index, utc=True)
@@ -91,73 +101,91 @@ async def render_google_finance_chart(
     if len(work) > 2500:
         work = work.iloc[-2500:]
 
-    series = work["Close"]
+    display_index = _display_index(work.index, symbol)
+    series = pd.Series(work["Close"].to_numpy(dtype=float), index=display_index)
     last_price = price if price is not None else float(series.iloc[-1])
     currency_text = f" {currency}" if currency else ""
-    move_text = f"  {change_percent:+.2f}%" if change_percent is not None else ""
 
-    fig, ax = plt.subplots(figsize=(12.8, 7.2), dpi=160, facecolor="#0b1220")
-    ax.set_facecolor("#111827")
+    fig, ax = plt.subplots(figsize=(12.8, 7.1), dpi=160, facecolor="#0b1220")
+    ax.set_facecolor("#36383f")
 
     x = series.index.to_pydatetime()
     y = series.to_numpy(dtype=float)
-    line_color = "#60a5fa"
-    fill_color = "#60a5fa"
-    muted = "#94a3b8"
+    baseline = float(min(y.min(), prev_close if prev_close and prev_close > 0 else y.min()))
+    spread = float(max(y.max(), prev_close if prev_close and prev_close > 0 else y.max()) - baseline)
+    padding = max(spread * 0.22, abs(last_price) * 0.0025, 0.01)
+    chart_bottom = baseline - padding
+    chart_top = float(max(y.max(), prev_close if prev_close and prev_close > 0 else y.max()) + padding)
 
-    ax.plot(x, y, linewidth=2.0, color=line_color, solid_capstyle="round")
-    ax.fill_between(x, y, y.min(), color=fill_color, alpha=0.08)
+    positive = change_percent is None or change_percent >= 0
+    line_color = "#81c995" if positive else "#f28b82"
+    fill_color = line_color
+    muted = "#b8bdc7"
+
+    ax.plot(x, y, linewidth=2.4, color=line_color, solid_capstyle="round", zorder=4)
+    ax.fill_between(x, y, chart_bottom, color=fill_color, alpha=0.10, zorder=1)
 
     if prev_close is not None and prev_close > 0:
-        ax.axhline(prev_close, linewidth=0.9, linestyle=(0, (2, 3)), color=muted, alpha=0.85)
+        ax.axhline(prev_close, linewidth=1.0, linestyle=(0, (1.5, 4)), color="#c3c7cf", alpha=0.7, zorder=2)
+        ax.text(
+            1.005,
+            prev_close,
+            f"Prev\nclose\n{prev_close:.6g}",
+            transform=ax.get_yaxis_transform(),
+            ha="left",
+            va="center",
+            fontsize=8,
+            color="#d4d7dd",
+            linespacing=1.05,
+        )
 
-    ax.scatter([x[-1]], [y[-1]], s=28, color=line_color, zorder=5)
-    ax.annotate(
-        f"{last_price:.6g}{currency_text}",
-        xy=(x[-1], y[-1]),
-        xytext=(-8, 12),
-        textcoords="offset points",
-        ha="right",
-        va="bottom",
-        fontsize=9,
-        color="#f8fafc",
-        bbox={"boxstyle": "round,pad=0.28", "fc": "#1f2937", "ec": "#334155", "alpha": 0.95},
-    )
+    ax.scatter([x[-1]], [y[-1]], s=42, color=line_color, edgecolor="#36383f", linewidth=1.2, zorder=6)
+    ax.set_ylim(chart_bottom, chart_top)
 
-    ax.grid(axis="y", color="#263246", linestyle=":", linewidth=0.8)
+    ax.grid(axis="y", color="#5a5e66", linestyle="-", linewidth=0.7, alpha=0.42)
     ax.grid(axis="x", visible=False)
     for spine in ax.spines.values():
         spine.set_visible(False)
-    ax.tick_params(colors=muted, labelsize=8, length=0)
+    ax.tick_params(colors="#d0d3da", labelsize=8, length=0, pad=8)
     ax.yaxis.tick_right()
 
-    locator = mdates.AutoDateLocator(minticks=4, maxticks=7)
+    locator = mdates.AutoDateLocator(minticks=4, maxticks=6)
     ax.xaxis.set_major_locator(locator)
     ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator))
+
+    price_line = f"{last_price:.6g}{currency_text}"
+    if change_percent is not None:
+        price_line += f"  {change_percent:+.2f}%"
     ax.set_title(
-        f"{symbol.upper()}  •  {last_price:.6g}{currency_text}{move_text}",
+        f"{symbol.upper()}\n{price_line}",
         loc="left",
         color="#f8fafc",
-        fontsize=15,
+        fontsize=18,
         fontweight="bold",
-        pad=16,
+        pad=14,
+        linespacing=1.25,
     )
-    ax.text(0.0, 1.015, timeframe.upper(), transform=ax.transAxes, ha="left", va="bottom", color=muted, fontsize=8)
-    if prev_close is not None and prev_close > 0:
-        ax.text(
-            0.99,
-            0.03,
-            f"Prev close  {prev_close:.6g}",
-            transform=ax.transAxes,
-            ha="right",
-            va="bottom",
-            color=muted,
-            fontsize=8,
-        )
+    ax.text(
+        1.0,
+        1.075,
+        timeframe.upper(),
+        transform=ax.transAxes,
+        ha="right",
+        va="bottom",
+        color="#b8bdc7",
+        fontsize=8,
+        fontweight="bold",
+    )
 
-    fig.subplots_adjust(left=0.045, right=0.945, top=0.84, bottom=0.12)
+    fig.subplots_adjust(left=0.035, right=0.90, top=0.79, bottom=0.16)
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=160, bbox_inches="tight", facecolor=fig.get_facecolor())
+    fig.savefig(
+        buf,
+        format="png",
+        dpi=160,
+        bbox_inches="tight",
+        facecolor=fig.get_facecolor(),
+    )
     plt.close(fig)
     buf.seek(0)
     return buf
@@ -174,13 +202,8 @@ async def render_chart(
     currency: str | None = None,
     change_percent: float | None = None,
 ) -> io.BytesIO:
-    """Render the configured chart style.
-
-    When Google Finance is enabled, its normalized price series is rendered in
-    the Google Finance-style line/area format. Otherwise the existing technical
-    candlestick renderer remains available.
-    """
-    if settings.google_finance_enabled:
+    """Render the standard Google Finance-style chart or the technical chart."""
+    if not advanced:
         return await render_google_finance_chart(
             df,
             symbol,
@@ -205,13 +228,12 @@ async def render_chart(
     if "EMA50" in enriched:
         plots.append(_line(enriched["EMA50"], 0, "#f59e0b", 1.15))
 
-    if advanced:
-        if "BB_UPPER" in enriched:
-            plots.append(_line(enriched["BB_UPPER"], 0, "#a78bfa", 0.9))
-        if "BB_MID" in enriched:
-            plots.append(_line(enriched["BB_MID"], 0, "#94a3b8", 0.7, "--"))
-        if "BB_LOWER" in enriched:
-            plots.append(_line(enriched["BB_LOWER"], 0, "#a78bfa", 0.9))
+    if "BB_UPPER" in enriched:
+        plots.append(_line(enriched["BB_UPPER"], 0, "#a78bfa", 0.9))
+    if "BB_MID" in enriched:
+        plots.append(_line(enriched["BB_MID"], 0, "#94a3b8", 0.7, "--"))
+    if "BB_LOWER" in enriched:
+        plots.append(_line(enriched["BB_LOWER"], 0, "#a78bfa", 0.9))
 
     if "RSI14" in enriched:
         plots.extend(
@@ -223,7 +245,7 @@ async def render_chart(
             ]
         )
 
-    if advanced and {"MACD", "MACD_SIGNAL"}.issubset(enriched.columns):
+    if {"MACD", "MACD_SIGNAL"}.issubset(enriched.columns):
         histogram = enriched["MACD"] - enriched["MACD_SIGNAL"]
         plots.extend(
             [
@@ -239,8 +261,7 @@ async def render_chart(
     if has_volume:
         ratios.append(1.8)
     ratios.append(2)
-    if advanced:
-        ratios.append(2)
+    ratios.append(2)
 
     buf = io.BytesIO()
     fig, _ = mpf.plot(
@@ -251,8 +272,8 @@ async def render_chart(
         volume=has_volume,
         volume_panel=volume_panel if has_volume else 0,
         panel_ratios=ratios,
-        figsize=(12.5, 8.8 if advanced else 7.4),
-        title=f"{symbol.upper()}  •  {timeframe}" + ("  •  Advanced" if advanced else ""),
+        figsize=(12.5, 8.8),
+        title=f"{symbol.upper()}  •  {timeframe}  •  Advanced",
         ylabel="Price",
         ylabel_lower="Volume" if has_volume else "",
         xrotation=0,
@@ -262,7 +283,7 @@ async def render_chart(
     )
 
     fig.suptitle(
-        f"{symbol.upper()}  •  {timeframe}" + ("  •  Advanced" if advanced else ""),
+        f"{symbol.upper()}  •  {timeframe}  •  Advanced",
         x=0.055,
         y=0.985,
         ha="left",
@@ -274,7 +295,7 @@ async def render_chart(
     fig.text(
         0.055,
         0.018,
-        "EMA20 / EMA50" + ("  •  Bollinger Bands  •  RSI14  •  MACD" if advanced else "  •  RSI14"),
+        "EMA20 / EMA50  •  Bollinger Bands  •  RSI14  •  MACD",
         ha="left",
         va="bottom",
         fontsize=7.5,
