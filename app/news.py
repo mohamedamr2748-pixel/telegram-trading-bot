@@ -89,10 +89,17 @@ _BROAD_ROUNDUP_TERMS = (
     "stocks gain", "stocks slide", "market roundup", "market wrap", "morning briefing",
 )
 
+_LOW_SIGNAL_INVESTING_TERMS = (
+    "10 years ago", "20 years ago", "years ago", "better buy for the next decade", "next decade", "would have",
+    "if you invested", "investing $", "investing $10", "investing $20", "retirement", "millionaire", "passive income",
+    "personal finance", "how to buy", "should you buy", "best stock to buy", "buy for the long term",
+)
+
 _IRRELEVANT_TERMS = (
     "mcp server", "mcp servers", "streaming", "tv shows", "movies", "movie", "recipe", "fashion", "celebrity", "wedding",
     "travel guide", "best restaurants", "game review", "gaming guide", "gift guide", "what to watch", "netflix shows",
     "tokenized", "tokenised", "tokenized stock", "tokenised stock", "synthetic stock", "wrapped token", "tokenized aapl",
+    "tokenized stocks", "tokenised stocks", "stock token", "stock tokens", "bstocks",
 )
 
 _CRYPTO_ONLY_DOMAINS = {"coindesk.com", "cointelegraph.com", "theblock.co", "blockworks.co", "decrypt.co"}
@@ -173,8 +180,10 @@ def _active_sources(symbol: str) -> tuple[NewsSource, ...]:
 
 def _source_allowed_for_route(item: NewsItemDTO, symbol: str) -> bool:
     source = _source_for_item(item)
+    # Hard allow-list: /news may only surface publishers from NEWS_SOURCES.
+    # Google News and GDELT remain discovery layers, not editorial sources.
     if source is None:
-        return True
+        return False
     route = _asset_route(symbol)
     domain = source.domain
     if route != "crypto" and domain in _CRYPTO_ONLY_DOMAINS:
@@ -243,25 +252,14 @@ def _is_recent(published_at: datetime | None, hours: int) -> bool:
     return published_at >= cutoff
 
 
-def _contains_phrase(title: str, phrase: str) -> bool:
-    return phrase.lower() in title
-
-
 def _search_query(symbol: str, source: NewsSource) -> str:
     symbol = symbol.upper()
     alias = _COMPANY_ALIASES.get(symbol, symbol)
     route = _asset_route(symbol)
-
     if route == "equity":
         phrases = [
-            f'"{symbol}"',
-            f'"{alias} shares"',
-            f'"{alias} stock"',
-            f'"{alias} earnings"',
-            f'"{alias} revenue"',
-            f'"{alias} guidance"',
-            f'"{alias} analyst"',
-            f'"{alias} investors"',
+            f'"{symbol}"', f'"{alias} shares"', f'"{alias} stock"', f'"{alias} earnings"',
+            f'"{alias} revenue"', f'"{alias} guidance"', f'"{alias} analyst"', f'"{alias} investors"',
             f'"{alias} price target"',
         ]
         if symbol in {"AAPL", "MSFT", "NVDA", "AMZN", "META", "GOOGL", "GOOG", "TSLA"}:
@@ -273,7 +271,6 @@ def _search_query(symbol: str, source: NewsSource) -> str:
         query = '"gold" OR "XAUUSD" price OR market OR bullion'
     else:
         query = f'"{alias}" OR "{symbol}" forex OR currency OR rate'
-
     return f"({query}) site:{source.domain} when:1d"
 
 
@@ -306,6 +303,8 @@ def _title_relevance(item: NewsItemDTO, symbol: str, terms: list[str]) -> tuple[
     title = _normalise_title(item.title)
     if any(bad in title for bad in _IRRELEVANT_TERMS):
         return False, -1000.0
+    if any(low in title for low in _LOW_SIGNAL_INVESTING_TERMS):
+        return False, -1000.0
     if not _source_allowed_for_route(item, symbol):
         return False, -1000.0
 
@@ -331,24 +330,15 @@ def _title_relevance(item: NewsItemDTO, symbol: str, terms: list[str]) -> tuple[
                 f"{alias} launches", f"{alias} launch", f"{alias} product",
             )
         )
-
-        # Multi-stock listicles and generic market roundups should not masquerade as
-        # single-ticker news. This specifically blocks headlines such as
-        # "GameStop, Oracle, Apple and More" and "Dow Jones Futures ... Apple ...".
         if other_companies >= 2 and not ticker_hit:
             return False, -1000.0
         if listicle_hits and not ticker_hit:
             return False, -1000.0
         if broad_hits and not ticker_hit and not company_context:
             return False, -1000.0
-
-        # A bare company mention is insufficient. It must have either an explicit
-        # financial phrase, a business-impact phrase, or a ticker symbol.
         if not ticker_hit and not company_context and direct_hits == 0 and business_hits == 0:
             return False, -1000.0
 
-        # If the title is clearly about several companies, keep it only as lower-value
-        # market context when the requested ticker is explicitly identified.
         score = 55.0
         if ticker_hit:
             score += 60.0
@@ -359,7 +349,6 @@ def _title_relevance(item: NewsItemDTO, symbol: str, terms: list[str]) -> tuple[
         score += min(keyword_hits, 4) * 7.0
         score += min(direct_hits, 5) * 17.0
         score += min(business_hits, 3) * 5.0
-
         if other_companies:
             score -= min(other_companies, 3) * 25.0
         if listicle_hits:
@@ -367,8 +356,6 @@ def _title_relevance(item: NewsItemDTO, symbol: str, terms: list[str]) -> tuple[
         if broad_hits:
             score -= 35.0 * broad_hits
 
-        # Product/consumer stories are acceptable only when there is a clear market
-        # consequence (for example an analyst view or share-price implication).
         consumer_terms = ("iphone", "ipad", "mac", "app store", "watch", "airpods")
         consumer_hits = sum(1 for term in consumer_terms if term in title)
         strong_market_hits = sum(1 for term in _DIRECT_MARKET_PHRASES if term in title)
@@ -376,15 +363,10 @@ def _title_relevance(item: NewsItemDTO, symbol: str, terms: list[str]) -> tuple[
             return False, -1000.0
         if consumer_hits:
             score -= max(0.0, consumer_hits - 1.0) * 10.0
-
-        # Generic "latest stock news" pages are useful but should rank below actual
-        # event/analysis headlines when better material exists.
         if title.startswith("latest ") and "stock news" in title:
             score -= 12.0
         return True, score
 
-    # Macro/asset-specific routes can use broader headlines because the asset itself
-    # is the market concept (gold, forex, bitcoin, etc.).
     market_hits = sum(1 for term in _MARKET_TERMS if term in title)
     score = 65.0 + (40.0 if ticker_hit else 0.0) + (20.0 if alias_hit else 0.0)
     score += min(market_hits, 5) * 8.0
@@ -395,14 +377,7 @@ def _title_relevance(item: NewsItemDTO, symbol: str, terms: list[str]) -> tuple[
 
 class GDELTNewsProvider:
     async def search(self, query: str, limit: int = 20, timespan: str = "48h") -> list[NewsItemDTO]:
-        params = {
-            "query": query,
-            "mode": "artlist",
-            "format": "json",
-            "maxrecords": min(limit, 75),
-            "timespan": timespan,
-            "sort": "datedesc",
-        }
+        params = {"query": query, "mode": "artlist", "format": "json", "maxrecords": min(limit, 75), "timespan": timespan, "sort": "datedesc"}
         async with httpx.AsyncClient(timeout=15) as client:
             response = await client.get(settings.gdelt_base_url, params=params)
             response.raise_for_status()
@@ -507,10 +482,7 @@ class NewsService:
         now = datetime.now(timezone.utc)
         sources = _active_sources(symbol)
         per_source_limit = max(4, min(7, limit + 1))
-
-        source_batches = await asyncio.gather(
-            *(self._search_source(source, symbol, per_source_limit) for source in sources)
-        )
+        source_batches = await asyncio.gather(*(self._search_source(source, symbol, per_source_limit) for source in sources))
         google_items = [item for batch in source_batches for item in batch]
 
         gdelt_items: list[NewsItemDTO] = []
@@ -523,12 +495,7 @@ class NewsService:
 
         custom_items = await self.rss.fetch(settings.rss_urls, limit=max(3, limit // 2)) if settings.rss_urls else []
         candidates = google_items + gdelt_items + custom_items
-
-        candidates = [
-            item for item in candidates
-            if _is_recent(item.published_at, 24)
-            and _source_allowed_for_route(item, symbol)
-        ]
+        candidates = [item for item in candidates if _is_recent(item.published_at, 24) and _source_allowed_for_route(item, symbol)]
         for item in candidates:
             item.symbol = symbol
 
@@ -550,12 +517,14 @@ class NewsService:
         per_source_count: dict[str, int] = {}
         for item in ranked:
             source = _source_for_item(item)
-            source_label = source.name if source else (item.source or "Unknown source")
+            if source is None:
+                continue
+            source_label = source.name
             count = per_source_count.get(source_label, 0)
             if count >= 2:
                 continue
             per_source_count[source_label] = count + 1
-            date_label = item.published_at.strftime("%d %b %Y") if item.published_at else "Date n/a"
+            date_label = item.published_at.strftime("%d %b %Y")
             item.title = f"[{date_label}] {item.title}"
             item.source = source_label
             output.append(item)
@@ -578,7 +547,9 @@ class NewsService:
                 if not ok:
                     continue
                 source = _source_for_item(item)
-                item.source = source.name if source else (item.source or "Unknown source")
+                if source is None:
+                    continue
+                item.source = source.name
                 item.title = f"[{item.published_at.strftime('%d %b %Y')}] {item.title}"
                 if not any(self._near_duplicate(item, existing) for existing in output):
                     output.append(item)
