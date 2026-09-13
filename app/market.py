@@ -222,10 +222,11 @@ class YFinanceProvider(MarketProvider):
         "USDEUR": "EURUSD",
         "USDGBP": "GBPUSD",
         "JPYUSD": "USDJPY",
+        "USDAUD": "AUDUSD",
         "AUUSD": "AUDUSD",
         "CADUSD": "USDCAD",
         "CHFUSD": "USDCHF",
-        "NZDUSD": None,
+        "USDNZD": "NZDUSD",
     }
 
     @classmethod
@@ -250,14 +251,16 @@ class YFinanceProvider(MarketProvider):
     @classmethod
     def _invert_history(cls, frame: pd.DataFrame) -> pd.DataFrame:
         inverted = frame.copy()
+        original_high = frame["High"].copy() if "High" in frame else None
+        original_low = frame["Low"].copy() if "Low" in frame else None
         if "Open" in inverted:
-            inverted["Open"] = inverted["Open"].apply(cls._invert_quote)
-        if "High" in inverted:
-            inverted["High"] = inverted["Low"].apply(cls._invert_quote)
-        if "Low" in inverted:
-            inverted["Low"] = inverted["High"].apply(cls._invert_quote)
+            inverted["Open"] = frame["Open"].apply(cls._invert_quote)
+        if original_low is not None:
+            inverted["High"] = original_low.apply(cls._invert_quote)
+        if original_high is not None:
+            inverted["Low"] = original_high.apply(cls._invert_quote)
         if "Close" in inverted:
-            inverted["Close"] = inverted["Close"].apply(cls._invert_quote)
+            inverted["Close"] = frame["Close"].apply(cls._invert_quote)
         return inverted
 
     @staticmethod
@@ -271,7 +274,7 @@ class YFinanceProvider(MarketProvider):
             return "crypto"
         if s in {"BTCUSD", "ETHUSD", "SOLUSD", "XRPUSD", "BNBUSD"}:
             return "crypto"
-        if s in {"EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD", "USDEUR", "USDGBP", "JPYUSD", "AUUSD", "CADUSD", "CHFUSD"}:
+        if s in {"EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD", "USDEUR", "USDGBP", "JPYUSD", "USDAUD", "AUUSD", "CADUSD", "CHFUSD", "USDNZD"}:
             return "forex"
         if s in {"XAUUSD", "XAGUSD"}:
             return "metal"
