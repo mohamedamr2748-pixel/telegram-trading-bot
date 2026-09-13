@@ -174,7 +174,7 @@ class NewsService:
     async def search(self, symbol: str, limit: int = 8) -> list[NewsItemDTO]:
         symbol = symbol.strip().upper()
         terms = _search_terms(symbol)
-        queries = [f'"{terms[0]}" OR "{terms[1]}"']
+        query = f'"{terms[0]}" OR "{terms[1]}"'
 
         gdelt_items: list[NewsItemDTO] = []
         google_items: list[NewsItemDTO] = []
@@ -182,7 +182,7 @@ class NewsService:
         # GDELT is the first free source. Broaden the query beyond an exact ticker
         # match so a company name such as NVIDIA still returns relevant stories.
         try:
-            gdelt_items = await self.gdelt.search(queries[0], max(limit, 10))
+            gdelt_items = await self.gdelt.search(query, max(limit, 10))
         except Exception:
             gdelt_items = []
 
@@ -195,12 +195,7 @@ class NewsService:
             google_items = []
 
         rss_items = await self.rss.fetch(settings.rss_urls, limit=max(3, limit // 2)) if settings.rss_urls else []
-        alias_text = " ".join(terms).lower()
-        combined = gdelt_items + google_items + [
-            item
-            for item in rss_items
-            if any(term.lower() in item.title.lower() for term in terms) or alias_text in item.title.lower()
-        ]
+        combined = gdelt_items + google_items + rss_items
 
         seen: set[str] = set()
         unique: list[NewsItemDTO] = []
@@ -216,4 +211,11 @@ class NewsService:
             key=lambda x: x.published_at or datetime.min.replace(tzinfo=timezone.utc),
             reverse=True,
         )
+
+        # Keep the bot formatter simple: every result carries its publication date
+        # directly in the linked title. Unknown dates are explicitly marked.
+        for item in unique:
+            date_label = item.published_at.strftime("%d %b %Y") if item.published_at else "Date n/a"
+            item.title = f"[{date_label}] {item.title}"
+
         return unique[:limit]
