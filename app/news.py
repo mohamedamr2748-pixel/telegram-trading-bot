@@ -15,101 +15,72 @@ from config import settings
 
 
 _COMPANY_ALIASES = {
-    "AAPL": "Apple",
-    "MSFT": "Microsoft",
-    "NVDA": "NVIDIA",
-    "AMZN": "Amazon",
-    "META": "Meta Platforms",
-    "TSLA": "Tesla",
-    "GOOGL": "Alphabet",
-    "GOOG": "Alphabet",
-    "AVGO": "Broadcom",
-    "AMD": "AMD",
-    "PLTR": "Palantir",
-    "COIN": "Coinbase",
-    "INTC": "Intel",
-    "JPM": "JPMorgan",
-    "NFLX": "Netflix",
-    "ORCL": "Oracle",
-    "CRM": "Salesforce",
-    "MU": "Micron",
-    "QCOM": "Qualcomm",
-    "BA": "Boeing",
-    "WMT": "Walmart",
-    "XOM": "Exxon Mobil",
-    "CVX": "Chevron",
-    "SPY": "S&P 500 ETF",
-    "QQQ": "Nasdaq 100 ETF",
-    "IWM": "Russell 2000 ETF",
-    "BTCUSD": "Bitcoin",
-    "ETHUSD": "Ethereum",
-    "XAUUSD": "Gold",
-    "EURUSD": "EUR USD",
-    "GBPUSD": "GBP USD",
-    "USDJPY": "USD JPY",
+    "AAPL": "Apple", "MSFT": "Microsoft", "NVDA": "NVIDIA", "AMZN": "Amazon", "META": "Meta Platforms",
+    "TSLA": "Tesla", "GOOGL": "Alphabet", "GOOG": "Alphabet", "AVGO": "Broadcom", "AMD": "AMD",
+    "PLTR": "Palantir", "COIN": "Coinbase", "INTC": "Intel", "JPM": "JPMorgan", "NFLX": "Netflix",
+    "ORCL": "Oracle", "CRM": "Salesforce", "MU": "Micron", "QCOM": "Qualcomm", "BA": "Boeing",
+    "WMT": "Walmart", "XOM": "Exxon Mobil", "CVX": "Chevron", "SPY": "S&P 500 ETF",
+    "QQQ": "Nasdaq 100 ETF", "IWM": "Russell 2000 ETF", "BTCUSD": "Bitcoin", "ETHUSD": "Ethereum",
+    "XAUUSD": "Gold", "EURUSD": "EUR USD", "GBPUSD": "GBP USD", "USDJPY": "USD JPY",
 }
 
 _COMPANY_KEYWORDS = {
-    "AAPL": ("apple", "apple inc", "iphone", "ipad", "mac", "tim cook", "app store", "apple shares"),
-    "MSFT": ("microsoft", "azure", "copilot", "windows", "office"),
-    "NVDA": ("nvidia", "nvda", "jensen huang", "gpu", "cuda", "blackwell"),
-    "AMZN": ("amazon", "aws", "prime", "bezos"),
+    "AAPL": ("apple", "iphone", "ipad", "mac", "tim cook", "app store"),
+    "MSFT": ("microsoft", "windows", "azure", "copilot", "office"),
+    "NVDA": ("nvidia", "gpu", "gpu chips", "jensen huang"),
+    "AMZN": ("amazon", "aws", "prime", "jeff bezos"),
     "META": ("meta", "facebook", "instagram", "whatsapp", "zuckerberg"),
     "TSLA": ("tesla", "elon musk", "model 3", "model y", "cybertruck"),
     "GOOGL": ("alphabet", "google", "youtube", "waymo", "gemini"),
     "GOOG": ("alphabet", "google", "youtube", "waymo", "gemini"),
-    "AVGO": ("broadcom", "avgo", "vmware"),
-    "AMD": ("amd", "advanced micro devices", "radeon", "ryzen"),
-    "PLTR": ("palantir", "foundry", "aip"),
-    "COIN": ("coinbase", "coinbase stock"),
-    "INTC": ("intel", "intel foundry"),
-    "JPM": ("jpmorgan", "jp morgan", "jamie dimon"),
-    "NFLX": ("netflix"),
-    "ORCL": ("oracle", "oci"),
-    "CRM": ("salesforce", "slack"),
-    "MU": ("micron", "dram", "nand"),
-    "QCOM": ("qualcomm", "snapdragon"),
-    "BA": ("boeing", "737", "787"),
-    "WMT": ("walmart"),
-    "XOM": ("exxon", "exxonmobil", "exxon mobil"),
-    "CVX": ("chevron"),
-    "SPY": ("s&p 500", "sp500", "sp 500", "spy"),
-    "QQQ": ("nasdaq 100", "nasdaq-100", "qqq"),
-    "IWM": ("russell 2000", "iwm"),
-    "BTCUSD": ("bitcoin", "btc"),
-    "ETHUSD": ("ethereum", "ether", "eth"),
-    "XAUUSD": ("gold", "xau", "bullion"),
-    "EURUSD": ("eur/usd", "euro", "eurusd"),
-    "GBPUSD": ("gbp/usd", "pound", "sterling", "gbpusd"),
+    "AVGO": ("broadcom", "avgo", "vmware"), "AMD": ("amd", "advanced micro devices", "radeon"),
+    "PLTR": ("palantir", "foundry", "aip"), "COIN": ("coinbase", "coin"),
+    "INTC": ("intel", "intel foundry"), "JPM": ("jpmorgan", "jp morgan", "jamie dimon"),
+    "NFLX": ("netflix"), "ORCL": ("oracle", "oci"), "CRM": ("salesforce", "slack"),
+    "MU": ("micron", "dram", "nand"), "QCOM": ("qualcomm", "snapdragon"), "BA": ("boeing", "737", "787"),
+    "WMT": ("walmart"), "XOM": ("exxon", "exxonmobil", "exxon mobil"), "CVX": ("chevron"),
+    "SPY": ("s&p 500", "sp500", "sp 500"), "QQQ": ("nasdaq 100", "nasdaq-100", "qqq"),
+    "IWM": ("russell 2000", "russell 2000", "iwm"), "BTCUSD": ("bitcoin", "btc"),
+    "ETHUSD": ("ethereum", "ether", "eth"), "XAUUSD": ("gold", "xau", "bullion"),
+    "EURUSD": ("eur/usd", "euro", "eurusd"), "GBPUSD": ("gbp/usd", "pound", "sterling", "gbpusd"),
     "USDJPY": ("usd/jpy", "yen", "usdjpy"),
 }
 
 _MARKET_TERMS = (
-    "stock", "stocks", "share", "shares", "share price", "earnings", "revenue", "profit", "profits",
-    "sales", "guidance", "forecast", "analyst", "price target", "target price", "valuation", "investor",
-    "market", "markets", "trading", "price", "dividend", "buyback", "upgrade", "downgrade", "estimate",
-    "outlook", "demand", "supply", "tariff", "regulation", "lawsuit", "acquisition", "merger", "partnership",
-    "semiconductor", "chip", "gpu", "ai", "cloud", "margin", "capex", "cash flow", "credit", "bond", "yield",
-    "rate", "fed", "inflation", "jobs", "oil", "crude", "gold", "silver", "forex", "currency", "bitcoin",
-    "crypto", "ethereum", "etf", "options", "futures",
+    "stock", "stocks", "shares", "share price", "earnings", "revenue", "profit", "sales", "forecast", "guidance",
+    "analyst", "price target", "target", "valuation", "investor", "market", "trading", "price", "dividend",
+    "buyback", "upgrade", "downgrade", "estimate", "outlook", "demand", "supply", "tariff", "regulation",
+    "lawsuit", "acquisition", "merger", "partnership", "semiconductor", "chip", "gpu", "ai", "cloud",
+    "margin", "capex", "cash flow", "credit", "bond", "yield", "rate", "fed", "inflation", "jobs",
+    "oil", "crude", "gold", "silver", "forex", "currency", "bitcoin", "crypto", "ethereum", "etf",
 )
 
-_STRONG_TRADING_TERMS = (
-    "stock", "stocks", "share", "shares", "earnings", "revenue", "profit", "sales", "guidance", "forecast",
-    "analyst", "price target", "valuation", "investor", "market", "markets", "trading", "dividend", "buyback",
-    "upgrade", "downgrade", "estimate", "outlook", "acquisition", "merger", "partnership", "tariff", "regulation",
-    "lawsuit", "demand", "supply", "fed", "inflation", "interest rate", "yield", "futures", "options", "etf",
+_DIRECT_MARKET_PHRASES = (
+    "shares", "stock", "share price", "earnings", "revenue", "profit", "sales", "guidance", "forecast",
+    "analyst", "price target", "valuation", "market cap", "buyback", "dividend", "upgrade", "downgrade",
+    "estimate", "outlook", "investor", "acquisition", "merger", "lawsuit", "regulation", "tariff",
 )
 
-_IRRELEVANT_TITLE_PATTERNS = (
-    "mcp server", "recipe", "fashion", "celebrity", "wedding", "travel guide", "best restaurants", "game review",
-    "gaming guide", "gift guide", "what to watch", "movies to stream", "tv shows", "streaming service",
+_SECONDARY_BUSINESS_PHRASES = (
+    "launches", "launch", "new product", "product", "iphone", "ipad", "mac", "chip", "factory", "manufacturing",
+    "partnership", "contract", "deal", "expands", "expansion", "opens", "service", "cloud",
 )
 
-_CONSUMER_ONLY_TERMS = (
-    "iphone price", "iphone deal", "iphone deals", "ipad deal", "macbook deal", "apple tv", "apple music",
-    "streaming", "movies", "tv shows", "watch this weekend", "price slashed", "discount", "coupon",
+_LISTICLE_TERMS = (
+    "and more", "five stocks", "six stocks", "seven stocks", "eight stocks", "10 stocks", "top stocks",
+    "stocks investors", "stocks to watch", "best stocks", "stocks worth", "couldn't stop buzzing", "cannot stop buzzing",
 )
+
+_IRRELEVANT_TERMS = (
+    "mcp server", "mcp servers", "streaming", "tv shows", "movies", "movie", "recipe", "fashion", "celebrity", "wedding",
+    "travel guide", "best restaurants", "game review", "gaming guide", "gift guide", "what to watch", "netflix shows",
+    "tokenized", "tokenised", "tokenized stock", "tokenised stock", "synthetic stock", "wrapped token",
+)
+
+_CRYPTO_ONLY_DOMAINS = {"coindesk.com", "cointelegraph.com", "theblock.co", "blockworks.co", "decrypt.co"}
+_FX_ONLY_DOMAINS = {"fxstreet.com", "forexfactory.com"}
+_METALS_DOMAINS = {"kitco.com"}
+_ENERGY_DOMAINS = {"oilprice.com"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,19 +132,46 @@ def _search_terms(symbol: str) -> list[str]:
     terms = [symbol]
     if alias and alias.lower() != symbol.lower():
         terms.append(alias)
-    terms.extend(_COMPANY_KEYWORDS.get(symbol, ())[:3])
-    # Preserve order while removing duplicates.
-    return list(dict.fromkeys(term for term in terms if term))
+    return terms
 
 
 def _asset_route(symbol: str) -> str:
+    symbol = symbol.upper()
     if symbol in {"BTCUSD", "ETHUSD"}:
         return "crypto"
-    if symbol == "XAUUSD":
+    if symbol in {"XAUUSD"}:
         return "gold"
     if symbol in {"EURUSD", "GBPUSD", "USDJPY"}:
         return "fx"
     return "equity"
+
+
+def _active_sources(symbol: str) -> tuple[NewsSource, ...]:
+    route = _asset_route(symbol)
+    specialist_domains = {
+        "crypto": _CRYPTO_ONLY_DOMAINS,
+        "gold": _METALS_DOMAINS | _ENERGY_DOMAINS,
+        "fx": _FX_ONLY_DOMAINS,
+        "equity": set(),
+    }[route]
+    return tuple(source for source in NEWS_SOURCES if source.priority <= 19 or source.domain in specialist_domains or source.priority in {29, 30})
+
+
+def _source_allowed_for_route(item: NewsItemDTO, symbol: str) -> bool:
+    source = _source_for_item(item)
+    if source is None:
+        return True
+    route = _asset_route(symbol)
+    domain = source.domain
+    if route != "crypto" and domain in _CRYPTO_ONLY_DOMAINS:
+        return False
+    if route != "fx" and domain in _FX_ONLY_DOMAINS:
+        return False
+    if route not in {"gold", "crypto"} and domain in _METALS_DOMAINS:
+        return False
+    if route not in {"gold", "crypto"} and domain in _ENERGY_DOMAINS:
+        return False
+    return True
 
 
 def _parse_datetime(value: object) -> datetime | None:
@@ -195,12 +193,14 @@ def _parse_datetime(value: object) -> datetime | None:
     return None
 
 
-def _normalise_text(text: str) -> str:
-    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]+", " ", text.lower())).strip()
+def _normalise_title(title: str) -> str:
+    text = re.sub(r"\[[^\]]+\]", "", title.lower())
+    text = re.sub(r"[^a-z0-9 ]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def _title_tokens(title: str) -> set[str]:
-    return {token for token in _normalise_text(title).split() if len(token) > 2}
+    return {token for token in _normalise_title(title).split() if len(token) > 2}
 
 
 def _canonical_url(url: str) -> str:
@@ -215,115 +215,99 @@ def _source_for_item(item: NewsItemDTO) -> NewsSource | None:
     for source in NEWS_SOURCES:
         if host == source.domain or host.endswith("." + source.domain):
             return source
-    source_name = (item.source or "").strip().lower()
+    name = (item.source or "").strip().lower()
     for source in NEWS_SOURCES:
-        if source_name == source.name.lower():
+        if name == source.name.lower():
             return source
     return None
 
 
-def _is_recent(published_at: datetime | None, hours: int = 48) -> bool:
-    return bool(published_at and published_at >= datetime.now(timezone.utc) - timedelta(hours=hours))
+def _is_recent(published_at: datetime | None, hours: int) -> bool:
+    if published_at is None:
+        return False
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    return published_at >= cutoff
 
 
-def _query_for_source(symbol: str, source: NewsSource) -> str:
-    terms = _search_terms(symbol)
-    quoted = " OR ".join(f'"{term}"' for term in terms)
-    asset = _asset_route(symbol)
-    if asset == "equity":
-        context = "stock OR shares OR earnings OR revenue OR market OR investor"
-    elif asset == "crypto":
-        context = "price OR market OR ETF OR regulation OR trading OR crypto"
-    elif asset == "gold":
-        context = "gold OR bullion OR metals OR futures OR price OR market"
-    else:
-        context = "forex OR currency OR central bank OR interest rate OR trading"
-    return f"({quoted}) ({context}) site:{source.domain} when:2d"
+def _title_relevance(item: NewsItemDTO, symbol: str, terms: list[str]) -> tuple[bool, float]:
+    title = _normalise_title(item.title)
+    if any(bad in title for bad in _IRRELEVANT_TERMS):
+        return False, -1000.0
+    if not _source_allowed_for_route(item, symbol):
+        return False, -1000.0
 
-
-def _title_relevance(item: NewsItemDTO, symbol: str) -> tuple[bool, float]:
-    title = _normalise_text(item.title)
-    terms = [term.lower() for term in (_COMPANY_KEYWORDS.get(symbol, ()) + (symbol,))]
-    target_hits = sum(1 for term in terms if term and term in title)
+    target_terms = list(terms) + list(_COMPANY_KEYWORDS.get(symbol, ()))
+    target_terms = [term.lower() for term in target_terms]
+    target_hits = sum(1 for term in target_terms if term in title)
     if target_hits == 0:
         return False, -1000.0
 
-    if any(pattern in title for pattern in _IRRELEVANT_TITLE_PATTERNS):
-        return False, -1000.0
-
-    strong_hits = sum(1 for term in _STRONG_TRADING_TERMS if term in title)
     market_hits = sum(1 for term in _MARKET_TERMS if term in title)
+    direct_hits = sum(1 for term in _DIRECT_MARKET_PHRASES if term in title)
+    secondary_hits = sum(1 for term in _SECONDARY_BUSINESS_PHRASES if term in title)
+    listicle_hits = sum(1 for term in _LISTICLE_TERMS if term in title)
 
-    # Consumer/product stories need a stronger market signal. This eliminates
-    # things such as "iPhone price slashed" and "Apple TV" from an equity feed
-    # while keeping genuine company-market stories involving products.
-    consumer_hits = sum(1 for term in _CONSUMER_ONLY_TERMS if term in title)
-    if consumer_hits and strong_hits == 0:
-        return False, -900.0
+    # For equities, a direct trading context is the default requirement. Purely
+    # consumer/product stories are retained only as lower-priority secondary news.
+    if symbol not in {"SPY", "QQQ", "IWM", "BTCUSD", "ETHUSD", "XAUUSD", "EURUSD", "GBPUSD", "USDJPY"}:
+        if direct_hits == 0 and secondary_hits == 0:
+            return False, -1000.0
+        if direct_hits == 0 and secondary_hits > 0:
+            score = 25.0 + target_hits * 12.0 + secondary_hits * 4.0
+        else:
+            score = 80.0 + target_hits * 30.0 + min(direct_hits, 5) * 18.0 + min(market_hits, 4) * 7.0
+    else:
+        score = 70.0 + target_hits * 30.0 + min(market_hits, 5) * 10.0
 
-    # Generic company-name matches are not enough; there must be a meaningful
-    # financial/market/operational signal in the headline.
-    route = _asset_route(symbol)
-    minimum_market_signal = 1 if route in {"crypto", "gold", "fx"} else 1
-    if market_hits < minimum_market_signal:
-        return False, -800.0
-
-    score = target_hits * 30.0 + min(strong_hits, 4) * 18.0 + min(market_hits, 5) * 5.0
+    # The target should be the subject, not merely one item in a multi-stock list.
     if symbol.lower() in title:
-        score += 22.0
+        score += 35.0
     alias = _COMPANY_ALIASES.get(symbol)
     if alias and alias.lower() in title:
-        score += 12.0
+        score += 18.0
+
+    # AAPL-specific market phrasing such as "Apple shares" is materially stronger
+    # than simply mentioning "Apple" in a broad market roundup.
+    if alias:
+        direct_company_patterns = tuple(
+            f"{alias.lower()} {phrase}" for phrase in _DIRECT_MARKET_PHRASES
+        )
+        if any(pattern in title for pattern in direct_company_patterns):
+            score += 35.0
+
+    if listicle_hits:
+        score -= 45.0 * listicle_hits
+    if "dow jones futures" in title or "stock market today" in title:
+        score -= 25.0
+    if title.startswith("latest ") and "stock news" in title:
+        score -= 10.0
+
     return True, score
-
-
-def _specialty_bonus(symbol: str, source: NewsSource) -> float:
-    route = _asset_route(symbol)
-    if route == "crypto" and "crypto" in source.specialties:
-        return 15.0
-    if route == "gold" and any(term in source.specialties for term in ("gold", "metals", "commodities")):
-        return 12.0
-    if route == "fx" and any(term in source.specialties for term in ("fx", "central banks")):
-        return 12.0
-    return 0.0
 
 
 class GDELTNewsProvider:
     async def search(self, query: str, limit: int = 20, timespan: str = "48h") -> list[NewsItemDTO]:
-        params = {
-            "query": query,
-            "mode": "artlist",
-            "format": "json",
-            "maxrecords": min(limit, 75),
-            "timespan": timespan,
-            "sort": "datedesc",
-        }
+        params = {"query": query, "mode": "artlist", "format": "json", "maxrecords": min(limit, 75), "timespan": timespan, "sort": "datedesc"}
         async with httpx.AsyncClient(timeout=15) as client:
             response = await client.get(settings.gdelt_base_url, params=params)
             response.raise_for_status()
             payload = response.json()
-
-        results: list[NewsItemDTO] = []
+        items: list[NewsItemDTO] = []
         for article in payload.get("articles", []):
             url = article.get("url") or article.get("documentidentifier")
             title = article.get("title") or "Untitled"
             if not url:
                 continue
-            results.append(
-                NewsItemDTO(
-                    title=title,
-                    url=url,
-                    source=str(article.get("domain") or "GDELT"),
-                    published_at=_parse_datetime(article.get("seendate") or article.get("date")),
-                )
-            )
-        return results
+            published = _parse_datetime(article.get("seendate") or article.get("date"))
+            source = article.get("domain") or article.get("sourcecountry") or "GDELT"
+            items.append(NewsItemDTO(title=title, url=url, source=str(source), published_at=published, symbol=query))
+        return items
 
 
 class GoogleNewsRSSProvider:
     base_url = "https://news.google.com/rss/search"
 
-    async def search(self, query: str, limit: int = 8) -> list[NewsItemDTO]:
+    async def search(self, query: str, limit: int = 10) -> list[NewsItemDTO]:
         url = f"{self.base_url}?q={quote_plus(query)}&hl=en-US&gl=US&ceid=US:en"
 
         def parse() -> list[NewsItemDTO]:
@@ -336,39 +320,25 @@ class GoogleNewsRSSProvider:
                     continue
                 source_obj = entry.get("source")
                 source = source_obj.get("title") if hasattr(source_obj, "get") else None
-                output.append(
-                    NewsItemDTO(
-                        title=title,
-                        url=link,
-                        source=source or "Google News",
-                        published_at=_parse_datetime(entry.get("published") or entry.get("updated")),
-                    )
-                )
+                published = _parse_datetime(entry.get("published") or entry.get("updated"))
+                output.append(NewsItemDTO(title=title, url=link, source=source or "Google News", published_at=published, symbol=query))
             return output
-
         return await asyncio.to_thread(parse)
 
 
 class RSSNewsProvider:
-    async def fetch(self, urls: list[str], limit: int = 8) -> list[NewsItemDTO]:
+    async def fetch(self, urls: list[str], limit: int = 10) -> list[NewsItemDTO]:
         def parse(url: str) -> list[NewsItemDTO]:
             feed = feedparser.parse(url)
-            results: list[NewsItemDTO] = []
+            result: list[NewsItemDTO] = []
             for entry in feed.entries[:limit]:
                 link = entry.get("link")
                 title = entry.get("title")
                 if not link or not title:
                     continue
-                results.append(
-                    NewsItemDTO(
-                        title=title,
-                        url=link,
-                        source=feed.feed.get("title", url),
-                        published_at=_parse_datetime(entry.get("published") or entry.get("updated")),
-                    )
-                )
-            return results
-
+                published = _parse_datetime(entry.get("published") or entry.get("updated"))
+                result.append(NewsItemDTO(title=title, url=link, source=feed.feed.get("title", url), published_at=published))
+            return result
         batches = await asyncio.gather(*(asyncio.to_thread(parse, url) for url in urls), return_exceptions=True)
         output: list[NewsItemDTO] = []
         for batch in batches:
@@ -383,31 +353,30 @@ class NewsService:
         self.gdelt = GDELTNewsProvider()
         self.google = GoogleNewsRSSProvider()
         self.rss = RSSNewsProvider()
-        self._semaphore = asyncio.Semaphore(8)
+        self._semaphore = asyncio.Semaphore(10)
 
-    async def _search_source(self, source: NewsSource, symbol: str, limit: int) -> list[NewsItemDTO]:
-        query = _query_for_source(symbol, source)
+    async def _search_source(self, source: NewsSource, terms: list[str], limit: int) -> list[NewsItemDTO]:
+        query_terms = " OR ".join(f'"{term}"' for term in terms)
+        query = f"({query_terms}) site:{source.domain}"
         async with self._semaphore:
             try:
                 return await self.google.search(query, limit)
             except Exception:
                 return []
 
-    def _score(self, item: NewsItemDTO, symbol: str) -> float:
-        ok, relevance = _title_relevance(item, symbol)
+    def _score(self, item: NewsItemDTO, symbol: str, terms: list[str]) -> float:
+        ok, relevance = _title_relevance(item, symbol, terms)
         if not ok:
             return -1000.0
         source = _source_for_item(item)
         source_score = 0.0
-        specialty_bonus = 0.0
         if source:
-            source_score = max(0.0, 58.0 - (source.priority - 1) * 1.75) * source.reliability
-            specialty_bonus = _specialty_bonus(symbol, source)
+            source_score = max(0.0, 55.0 - (source.priority - 1) * 1.65) * source.reliability
         freshness = 0.0
         if item.published_at:
-            age_hours = max(0.0, (datetime.now(timezone.utc) - item.published_at).total_seconds() / 3600.0)
-            freshness = max(0.0, 34.0 - age_hours * 1.15)
-        return relevance + source_score + specialty_bonus + freshness
+            age_minutes = max(0.0, (datetime.now(timezone.utc) - item.published_at).total_seconds() / 60.0)
+            freshness = max(0.0, 35.0 - age_minutes / 30.0)
+        return relevance + source_score + freshness
 
     @staticmethod
     def _near_duplicate(a: NewsItemDTO, b: NewsItemDTO) -> bool:
@@ -416,40 +385,43 @@ class NewsService:
         if not a_tokens or not b_tokens:
             return False
         overlap = len(a_tokens & b_tokens) / min(len(a_tokens), len(b_tokens))
-        return overlap >= 0.78
+        return overlap >= 0.82
 
     async def search(self, symbol: str, limit: int = 8) -> list[NewsItemDTO]:
         symbol = symbol.strip().upper()
+        terms = _search_terms(symbol)
         now = datetime.now(timezone.utc)
-        sources = NEWS_SOURCES  # Keep the full 30-source universe available for every asset.
+        sources = _active_sources(symbol)
+        per_source_limit = max(4, min(7, limit + 1))
 
         source_batches = await asyncio.gather(
-            *(self._search_source(source, symbol, max(5, min(8, limit + 2))) for source in sources)
+            *(self._search_source(source, terms, per_source_limit) for source in sources)
         )
         google_items = [item for batch in source_batches for item in batch]
 
-        # Broad fallback: useful for outlets not surfaced by a source-specific Google feed.
         gdelt_items: list[NewsItemDTO] = []
         try:
-            terms = _search_terms(symbol)
-            gdelt_query = " OR ".join(f'\"{term}\"' for term in terms[:4])
-            gdelt_items = await self.gdelt.search(gdelt_query, max(24, limit * 4), timespan="48h")
+            gdelt_query = f'({" OR ".join(terms)})'
+            gdelt_items = await self.gdelt.search(gdelt_query, max(20, limit * 4), timespan="48h")
         except Exception:
-            pass
+            gdelt_items = []
 
-        custom_items = await self.rss.fetch(settings.rss_urls, limit=max(4, limit // 2)) if settings.rss_urls else []
+        custom_items = await self.rss.fetch(settings.rss_urls, limit=max(3, limit // 2)) if settings.rss_urls else []
         candidates = google_items + gdelt_items + custom_items
-        candidates = [item for item in candidates if _is_recent(item.published_at, 48)]
+
+        # Reject stale, route-incompatible, and clearly non-trading candidates before ranking.
+        candidates = [
+            item for item in candidates
+            if _is_recent(item.published_at, 24)
+            and _source_allowed_for_route(item, symbol)
+        ]
         for item in candidates:
             item.symbol = symbol
 
-        # Rank first, then de-duplicate. A higher-priority source wins when several
-        # publishers carry the same story.
-        ranked_candidates = sorted(candidates, key=lambda item: self._score(item, symbol), reverse=True)
         ranked: list[NewsItemDTO] = []
         seen_urls: set[str] = set()
-        for item in ranked_candidates:
-            score = self._score(item, symbol)
+        for item in sorted(candidates, key=lambda candidate: self._score(candidate, symbol, terms), reverse=True):
+            score = self._score(item, symbol, terms)
             if score <= -500:
                 continue
             url_key = _canonical_url(item.url)
@@ -460,47 +432,44 @@ class NewsService:
             seen_urls.add(url_key)
             ranked.append(item)
 
-        # Preserve publisher diversity while still allowing a top publisher to
-        # contribute up to two strong stories.
+        # Keep publisher diversity without letting a weak broad-market source crowd out stronger direct stories.
         output: list[NewsItemDTO] = []
-        source_counts: dict[str, int] = {}
+        per_source_count: dict[str, int] = {}
         for item in ranked:
             source = _source_for_item(item)
             source_label = source.name if source else (item.source or "Unknown source")
-            if source_counts.get(source_label, 0) >= 2:
+            count = per_source_count.get(source_label, 0)
+            if count >= 2:
                 continue
-            source_counts[source_label] = source_counts.get(source_label, 0) + 1
-            item.source = source_label
+            per_source_count[source_label] = count + 1
             date_label = item.published_at.strftime("%d %b %Y") if item.published_at else "Date n/a"
             item.title = f"[{date_label}] {item.title}"
-            item.relevance = int(round(self._score(item, symbol)))
+            item.source = source_label
             output.append(item)
             if len(output) >= limit:
                 break
 
-        # Do not replace strict results with low-quality generic search results.
-        # If there are fewer than 3 valid stories, run one broader market query as
-        # a last resort, but keep the same title relevance filter and 48h window.
+        # Fallback is still allowed, but it must satisfy the same relevance gate.
         if len(output) < min(3, limit):
-            terms = _search_terms(symbol)
-            fallback_query = f'({" OR ".join(f"\"{term}\"" for term in terms[:4])}) (stock OR shares OR earnings OR market OR investor) when:2d'
+            fallback_query = f'("{terms[0]}" OR "{terms[1]}") (stock OR shares OR earnings OR analyst OR market OR price)'
             try:
-                fallback_items = await self.google.search(fallback_query, max(12, limit * 2))
+                fallback = await self.google.search(fallback_query, max(limit * 2, 8))
             except Exception:
-                fallback_items = []
-            for item in fallback_items:
-                if not _is_recent(item.published_at, 48):
-                    continue
-                ok, _ = _title_relevance(item, symbol)
-                if not ok:
+                fallback = []
+            for item in fallback:
+                if not item.published_at or item.published_at < now - timedelta(hours=48):
                     continue
                 item.symbol = symbol
-                if any(self._near_duplicate(item, existing) for existing in output):
+                if not _source_allowed_for_route(item, symbol):
+                    continue
+                ok, _ = _title_relevance(item, symbol, terms)
+                if not ok:
                     continue
                 source = _source_for_item(item)
                 item.source = source.name if source else (item.source or "Unknown source")
                 item.title = f"[{item.published_at.strftime('%d %b %Y')}] {item.title}"
-                output.append(item)
+                if not any(self._near_duplicate(item, existing) for existing in output):
+                    output.append(item)
                 if len(output) >= limit:
                     break
 
