@@ -4,7 +4,6 @@ import asyncio
 import json
 import secrets
 from datetime import datetime, timezone
-from typing import Awaitable, Callable
 
 from redis.asyncio import Redis
 
@@ -51,7 +50,7 @@ class NewsCacheService:
         payload = {
             "symbol": symbol,
             "created_at": created_at.isoformat(),
-            "refresh_at": (created_at.timestamp() + FRESH_SECONDS),
+            "refresh_at": created_at.timestamp() + FRESH_SECONDS,
             "articles": [
                 {
                     "title": item.title,
@@ -98,6 +97,19 @@ class NewsCacheService:
             return False
         now = now or datetime.now(timezone.utc)
         return (now - created_at).total_seconds() < FRESH_SECONDS
+
+    async def get_fresh(self, symbol: str, limit: int = 8) -> list[NewsItemDTO] | None:
+        """Return only a fresh cached result, without triggering verification or refresh."""
+        redis = await self._client()
+        if redis is None:
+            return None
+
+        symbol = symbol.strip().upper()
+        raw = await redis.get(self._cache_key(symbol))
+        created_at, items = self._deserialise(raw)
+        if not self._is_fresh(created_at):
+            return None
+        return items[:limit]
 
     async def get(self, symbol: str, limit: int = 8) -> list[NewsItemDTO]:
         symbol = symbol.strip().upper()
