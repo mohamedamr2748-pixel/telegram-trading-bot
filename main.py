@@ -11,10 +11,14 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
 from app.alerts import evaluate_alerts
-from app.bot import build_dispatcher
 from app.db import init_db, session_factory
 from app.market import MarketService
+from app.market_enrichment import install_market_enrichment
 from config import settings
+
+# Install before importing app.bot: bot.py creates its MarketService at import time.
+install_market_enrichment()
+from app.bot import build_dispatcher
 
 logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
 logger = logging.getLogger(__name__)
