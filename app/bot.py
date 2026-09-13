@@ -240,11 +240,22 @@ async def chart(message: Message) -> None:
 
 @router.message(Command("news"))
 async def news_cmd(message: Message) -> None:
-    parts = message.text.split(maxsplit=1) if message.text else []
+    parts = message.text.split() if message.text else []
     if len(parts) != 2:
         await message.answer("Usage: <code>/news AAPL</code>")
         return
     symbol = parts[1].strip().upper()
+
+    await message.answer(f"📩 Request received. Checking <b>{symbol}</b>...")
+
+    try:
+        await market.get_quote(symbol)
+    except Exception:
+        await message.answer(f"❌ <b>{symbol}</b> is not a valid or available ticker right now.")
+        return
+
+    await message.answer(f"🔎 <b>{symbol}</b> verified. Searching recent news...")
+
     if not await limit_or_message(message, "news"):
         return
     items = await news.search(symbol, 8)
