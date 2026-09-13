@@ -164,52 +164,31 @@ async def account(message: Message) -> None:
         alerts = await session.scalar(select(func.count(Alert.id)).where(Alert.user_id == user.id, Alert.active.is_(True), Alert.alert_type == "price")) or 0
         smart = await session.scalar(select(func.count(Alert.id)).where(Alert.user_id == user.id, Alert.active.is_(True), Alert.alert_type == "smart")) or 0
         usage_result = await session.execute(
-  select(Usage.key, Usage.count).where(
+            select(Usage.key, Usage.count).where(
                 Usage.user_id == user.id,
                 Usage.day == date.today(),
             )
         )
         usage = dict(usage_result.all())
         await message.answer(
-            "👤 <b>MY ACCOUNT</b>
-
-"
-            "<b>PLAN</b>
-"
-            f"Plan              <b>{user.plan.title()}</b>
-
-"
-            "<b>PORTFOLIO</b>
-"
-            f"Watchlist         <code>{watch_count} / 10</code>
-"
-            f"Price alerts      <code>{alerts} / 3</code>
-"
-            f"Smart alerts      <code>{smart} / 3</code>
-
-"
-            "<b>SETTINGS</b>
-"
-            f"Timezone          <code>{user.timezone}</code>
-
-"
-            "<b>USAGE • TODAY</b>
-"
-            f"Price             <code>{usage.get('price', 0)} / 50</code>
-"
-            f"Charts            <code>{usage.get('chart', 0)} / 10</code>
-"
-            f"News              <code>{usage.get('news', 0)} / 30</code>
-"
-            f"Scanner           <code>{usage.get('scanner', 0)} / 5</code>
-"
-            f"Brief             <code>{usage.get('brief', 0)} / 1</code>
-"
-            f"Why               <code>{usage.get('why', 0)} / 3</code>
-"
+            "👤 <b>MY ACCOUNT</b>\n\n"
+            "<b>PLAN</b>\n"
+            f"Plan              <b>{user.plan.title()}</b>\n\n"
+            "<b>PORTFOLIO</b>\n"
+            f"Watchlist         <code>{watch_count} / 10</code>\n"
+            f"Price alerts      <code>{alerts} / 3</code>\n"
+            f"Smart alerts      <code>{smart} / 3</code>\n\n"
+            "<b>SETTINGS</b>\n"
+            f"Timezone          <code>{user.timezone}</code>\n\n"
+            "<b>USAGE • TODAY</b>\n"
+            f"Price             <code>{usage.get('price', 0)} / 50</code>\n"
+            f"Charts            <code>{usage.get('chart', 0)} / 10</code>\n"
+            f"News              <code>{usage.get('news', 0)} / 30</code>\n"
+            f"Scanner           <code>{usage.get('scanner', 0)} / 5</code>\n"
+            f"Brief             <code>{usage.get('brief', 0)} / 1</code>\n"
+            f"Why               <code>{usage.get('why', 0)} / 3</code>\n"
             f"Advanced          <code>{usage.get('advanced', 0)} / 3</code>"
         )
-
 
 @router.message(Command("price"))
 async def price(message: Message) -> None:
