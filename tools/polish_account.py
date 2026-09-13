@@ -4,7 +4,7 @@ import re
 path = Path("app/bot.py")
 text = path.read_text()
 
-pattern = r'@router\\.message\\(Command\("account"\)\\)\\nasync def account\\(message: Message\\) -> None:\\n.*?\\n\\n\\n@router\\.message\\(Command\("price"\)\\)'
+pattern = r'@router\.message\(Command\("account"\)\)\nasync def account\(message: Message\) -> None:\n.*?\n\n\n@router\.message\(Command\("price"\)\)'
 replacement = '''@router.message(Command("account"))
 async def account(message: Message) -> None:
     from datetime import date
@@ -21,14 +21,13 @@ async def account(message: Message) -> None:
         await message.answer(
             "👤 <b>MY ACCOUNT</b>\n\n"
             "<b>PLAN</b>\n"
-            f"Free\n\n"
-            "<b>ACCOUNT</b>\n"
-            f"Joined         <code>{user.created_at.strftime('%d %b %Y')}</code>\n"
-            f"Timezone       <code>{user.timezone}</code>\n\n"
+            "Free\n\n"
             "<b>PORTFOLIO</b>\n"
             f"Watchlist      <code>{watch_count} / 10</code>\n"
             f"Price alerts   <code>{alerts} / 3</code>\n"
             f"Smart alerts   <code>{smart} / 3</code>\n\n"
+            "<b>SETTINGS</b>\n"
+            f"Timezone       <code>{user.timezone}</code>\n\n"
             "<b>USAGE • TODAY</b>\n"
             f"Price          <code>{usage.get('price', 0)} / 50</code>\n"
             f"Charts         <code>{usage.get('chart', 0)} / 10</code>\n"
