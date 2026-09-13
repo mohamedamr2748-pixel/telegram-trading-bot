@@ -236,20 +236,21 @@ async def render_google_finance_chart(df: pd.DataFrame, symbol: str, timeframe: 
         price_line += f"  {change_percent:+.2f}%"
     ax.set_title(f"{symbol.upper()}\n{price_line}", loc="left", color="#f8fafc", fontsize=20, fontweight="bold", pad=16, linespacing=1.25)
     ax.text(1.0, 1.075, timeframe.upper(), transform=ax.transAxes, ha="right", va="bottom", color="#b8bdc7", fontsize=9, fontweight="bold")
-    fig.subplots_adjust(left=0.035, right=0.89, top=0.79, bottom=0.34)
+    fig.subplots_adjust(left=0.035, right=0.89, top=0.79, bottom=0.35)
 
-    # Reference layout: three label/value pairs per row.
+    # Compact three-column stats layout.
     rows = [
         [("Open", stats["Open"]), ("Mkt cap", _fmt_value(quote.market_cap) if quote else "n/a"), ("Dividend", _fmt_meta(quote.dividend_yield, percent=True) if quote else "n/a")],
         [("High", stats["High"]), ("P/E ratio", _fmt_meta(quote.pe_ratio) if quote else "n/a"), ("After hours", _after_hours(quote))],
         [("Low", stats["Low"]), ("52-wk high", _fmt_value(quote.year_high) if quote else "n/a"), ("52-wk low", _fmt_value(quote.year_low) if quote else "n/a")],
     ]
-    y_positions = [0.285, 0.235, 0.185]
-    x_positions = [0.055, 0.37, 0.70]
+    y_positions = [0.285, 0.245, 0.205]
+    x_positions = [0.055, 0.36, 0.665]
+    value_offsets = [0.105, 0.105, 0.105]
     for ypos, row in zip(y_positions, rows):
-        for xpos, (label, value) in zip(x_positions, row):
+        for xpos, (label, value), offset in zip(x_positions, row, value_offsets):
             fig.text(xpos, ypos, label, ha="left", va="center", fontsize=9.0, color="#9aa0a6")
-            fig.text(xpos + 0.14, ypos, value, ha="left", va="center", fontsize=10.0, fontweight="bold", color="#f8fafc")
+            fig.text(xpos + offset, ypos, value, ha="left", va="center", fontsize=10.0, fontweight="bold", color="#f8fafc")
 
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=_STANDARD_DPI, bbox_inches="tight", pad_inches=0.08, facecolor=fig.get_facecolor(), edgecolor="none", pil_kwargs={"compress_level": 1})
