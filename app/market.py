@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
+from urllib.parse import quote
 
 import httpx
 import pandas as pd
@@ -22,6 +23,208 @@ class MarketProvider(ABC):
     @abstractmethod
     async def get_history(self, symbol: str, period: str = "1mo", interval: str = "1d") -> pd.DataFrame:
         raise NotImplementedError
+
+
+class GoogleFinanceProvider(MarketProvider):
+    """Google Finance public-page data exposed through Crawlora's Google Finance API."""
+
+    name = "google_finance"
+
+    _WINDOWS = {
+        "1d": "1D",
+        "5d": "5D",
+        "1mo": "1M",
+        "3mo": "3M",
+        "6mo": "6M",
+        "ytd": "YTD",
+        "1y": "1Y",
+        "5y": "5Y",
+        "max": "MAX",
+    }
+
+    def __init__(self) -> None:
+        self._symbol_cache: dict[str, str] = {}
+
+    @property
+    def enabled(self) -> bool:
+        return settings.google_finance_enabled and bool(settings.google_finance_api_key.strip())
+
+    def _headers(self) -> dict[str, str]:
+        return {"x-api-key": settings.google_finance_api_key.strip()}
+
+    async def _request(self, path: str, params: dict[str, str] | None = None) -> dict:
+        if not self.enabled:
+            raise RuntimeError("Google Finance provider is not configured")
+        url = f"{settings.google_finance_base_url.rstrip('/')}/{path.lstrip('/')}"
+        async with httpx.AsyncClient(timeout=20, headers=self._headers()) as client:
+            response = await client.get(url, params=params)
+            response.raise_for_status()
+            payload = response.json()
+        if not isinstance(payload, dict):
+            raise ValueError("Google Finance returned an invalid response")
+        if payload.get("code") not in (None, 200):
+            raise ValueError(str(payload.get("msg") or "Google Finance request failed"))
+        return payload.get("data") if isinstance(payload.get("data"), dict) else payload
+
+    @staticmethod
+    def _find_identifier(value: object) -> str | None:
+        if isinstance(value, dict):
+            for key in ("identifier", "quote", "symbol"):
+                candidate = value.get(key)
+                if isinstance(candidate, str) and ":" in candidate:
+                    return candidate.upper()
+            for child in value.values():
+                found = GoogleFinanceProvider._find_identifier(child)
+                if found:
+                    return found
+        elif isinstance(value, list):
+            for child in value:
+                found = GoogleFinanceProvider._find_identifier(child)
+                if found:
+                    return found
+        return None
+
+    async def resolve_symbol(self, symbol: str) -> str:
+        raw = symbol.strip().upper()
+        if ":" in raw or ("-" in raw and raw.split("-")[0].isalpha()):
+            return raw
+        cached = self._symbol_cache.get(raw)
+        if cached:
+            return cached
+        data = await self._request("search", {"q": raw})
+        identifier = self._find_identifier(data)
+        if not identifier:
+            raise ValueError(f"Could not resolve {symbol} on Google Finance")
+        self._symbol_cache[raw] = identifier
+        return identifier
+
+    @staticmethod
+    def _first_numeric(data: dict, *paths: tuple[str, ...]) -> float | None:
+        for path in paths:
+            current: object = data
+            for key in path:
+                if not isinstance(current, dict):
+                    current = None
+                    break
+                current = current.get(key)
+            if current not in (None, ""):
+                try:
+                    return float(current)
+                except (TypeError, ValueError):
+                    continue
+        return None
+
+    async def get_quote(self, symbol: str) -> MarketQuote:
+        identifier = await self.resolve_symbol(symbol)
+        data = await self._request(f"quote/{quote(identifier, safe=':,-.')}")
+
+        instrument = data.get("instrument") if isinstance(data.get("instrument"), dict) else data
+        tickers = instrument.get("tickers") if isinstance(instrument, dict) else None
+        if not isinstance(tickers, list):
+            tickers = data.get("tickers") if isinstance(data.get("tickers"), list) else []
+        last_ticker = tickers[-1] if tickers and isinstance(tickers[-1], dict) else {}
+
+        price = self._first_numeric(instrument, ("price",), ("current_price",)) or self._first_numeric(last_ticker, ("price",))
+        if price is None or price <= 0:
+            raise ValueError(f"Google Finance returned no valid price for {identifier}")
+
+        previous = self._first_numeric(
+            instrument,
+            ("previous_close",),
+            ("key_stats", "previous_close"),
+        )
+        change = self._first_numeric(instrument, ("change",))
+        change_pct = self._first_numeric(instrument, ("change_percent",))
+        if change is None and previous:
+            change = price - previous
+        if change_pct is None and previous:
+            change_pct = change / previous * 100 if change is not None else None
+
+        timestamp = datetime.now(timezone.utc)
+        raw_unix = instrument.get("last_update_unix") if isinstance(instrument, dict) else None
+        if raw_unix:
+            try:
+                timestamp = datetime.fromtimestamp(float(raw_unix), tz=timezone.utc)
+            except (TypeError, ValueError, OverflowError):
+                pass
+        raw_time = last_ticker.get("time") if isinstance(last_ticker, dict) else None
+        if isinstance(raw_time, str):
+            try:
+                timestamp = datetime.fromisoformat(raw_time.replace("Z", "+00:00"))
+            except ValueError:
+                pass
+
+        return MarketQuote(
+            symbol=identifier,
+            asset_class=str(instrument.get("type") or "market").lower(),
+            price=price,
+            open=self._first_numeric(instrument, ("open",), ("priceopen",)),
+            high=self._first_numeric(instrument, ("high",)),
+            low=self._first_numeric(instrument, ("low",)),
+            volume=self._first_numeric(instrument, ("volume",)) or 0.0,
+            change=change,
+            change_percent=change_pct,
+            timestamp=timestamp,
+            source=self.name,
+            market_status=str(instrument.get("market_state") or instrument.get("market_status") or "unknown"),
+        )
+
+    async def get_history(self, symbol: str, period: str = "1mo", interval: str = "1d") -> pd.DataFrame:
+        identifier = await self.resolve_symbol(symbol)
+        window = self._WINDOWS.get(period.lower())
+        if window is None:
+            raise ValueError(f"Unsupported Google Finance chart window: {period}")
+        data = await self._request(
+            f"chart/{quote(identifier, safe=':,-.')}",
+            {"window": window},
+        )
+
+        candidates: list[object] = []
+        for key in ("tickers", "points", "chart", "series", "data"):
+            value = data.get(key)
+            if isinstance(value, list):
+                candidates = value
+                break
+            if isinstance(value, dict):
+                for nested_key in ("tickers", "points", "series"):
+                    nested = value.get(nested_key)
+                    if isinstance(nested, list):
+                        candidates = nested
+                        break
+            if candidates:
+                break
+
+        rows: list[dict] = []
+        for point in candidates:
+            if not isinstance(point, dict):
+                continue
+            raw_time = point.get("time") or point.get("timestamp") or point.get("datetime")
+            raw_price = point.get("price")
+            if raw_price is None:
+                raw_price = point.get("close") if point.get("close") is not None else point.get("value")
+            if raw_time is None or raw_price in (None, ""):
+                continue
+            try:
+                timestamp = pd.to_datetime(raw_time, utc=True)
+                price = float(raw_price)
+            except (TypeError, ValueError):
+                continue
+            volume = to_float(point.get("volume"), 0.0)
+            rows.append({
+                "Date": timestamp,
+                "Open": price,
+                "High": price,
+                "Low": price,
+                "Close": price,
+                "Volume": volume,
+            })
+
+        if not rows:
+            raise ValueError(f"No chart data returned for {identifier}")
+
+        frame = pd.DataFrame(rows).set_index("Date").sort_index()
+        frame = frame[~frame.index.duplicated(keep="last")]
+        return frame
 
 
 class YFinanceProvider(MarketProvider):
@@ -142,11 +345,12 @@ class BiQuoteProvider(MarketProvider):
         )
 
     async def get_history(self, symbol: str, period: str = "1mo", interval: str = "1d") -> pd.DataFrame:
-        raise NotImplementedError("Use yfinance for OHLC history")
+        raise NotImplementedError("Use Google Finance or yfinance for OHLC history")
 
 
 class MarketService:
     def __init__(self) -> None:
+        self.google = GoogleFinanceProvider()
         self.yf = YFinanceProvider()
         self.bq = BiQuoteProvider()
 
@@ -161,6 +365,11 @@ class MarketService:
 
     async def get_quote(self, symbol: str) -> MarketQuote:
         symbol = symbol.strip().upper()
+        if settings.google_finance_enabled:
+            if not self.google.enabled:
+                raise RuntimeError("Google Finance is enabled but GOOGLE_FINANCE_API_KEY is missing")
+            return await self.google.get_quote(symbol)
+
         errors: list[str] = []
         providers = [self.bq, self.yf] if self._prefer_biquote(symbol) and settings.biquote_enabled else [self.yf, self.bq]
         for provider in providers:
@@ -175,4 +384,8 @@ class MarketService:
         raise RuntimeError("Market providers failed: " + " | ".join(errors))
 
     async def get_history(self, symbol: str, period: str = "1mo", interval: str = "1d") -> pd.DataFrame:
+        if settings.google_finance_enabled:
+            if not self.google.enabled:
+                raise RuntimeError("Google Finance is enabled but GOOGLE_FINANCE_API_KEY is missing")
+            return await self.google.get_history(symbol.strip().upper(), period, interval)
         return await self.yf.get_history(symbol.strip().upper(), period, interval)
