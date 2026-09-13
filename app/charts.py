@@ -12,7 +12,7 @@ import pandas as pd
 from app.domain import MarketQuote
 from app.indicators import add_advanced_indicators
 
-_STANDARD_FIGSIZE = (14.0, 10.5)
+_STANDARD_FIGSIZE = (16.0, 8.0)
 _STANDARD_DPI = 240
 _ADVANCED_DPI = 220
 
@@ -163,6 +163,12 @@ async def _correct_yfinance_previous_close(symbol: str, quote: MarketQuote | Non
     return quote.previous_close
 
 
+def _period_button_label(selected: str, value: str) -> tuple[str, str]:
+    if selected.upper().startswith(value.upper()):
+        return (f"● {value}", "#f8fafc")
+    return (value, "#c7ccd4")
+
+
 async def render_google_finance_chart(df: pd.DataFrame, symbol: str, timeframe: str, prev_close: float | None = None, price: float | None = None, currency: str | None = None, change_percent: float | None = None, quote: MarketQuote | None = None) -> io.BytesIO:
     if "Close" not in df.columns:
         raise ValueError("Chart requires a Close/price series")
@@ -200,8 +206,10 @@ async def render_google_finance_chart(df: pd.DataFrame, symbol: str, timeframe: 
     period_perf = _period_performance(series, timeframe, change_percent)
     stats = _session_stats(work, symbol)
     currency_text = f" {currency}" if currency else ""
-    fig, ax = plt.subplots(figsize=_STANDARD_FIGSIZE, dpi=_STANDARD_DPI, facecolor="#202124")
-    ax.set_facecolor("#3c4043")
+
+    fig = plt.figure(figsize=_STANDARD_FIGSIZE, dpi=_STANDARD_DPI, facecolor="#202124")
+    ax = fig.add_axes([0.035, 0.31, 0.865, 0.54])
+    ax.set_facecolor("#202124")
     x = series.index.to_pydatetime()
     y = series.to_numpy(dtype=float)
     baseline = float(min(y.min(), previous if previous else y.min()))
@@ -209,51 +217,75 @@ async def render_google_finance_chart(df: pd.DataFrame, symbol: str, timeframe: 
     spread = ceiling - baseline
     padding = max(spread * 0.22, abs(last_price) * 0.0025, 0.01)
     chart_bottom, chart_top = baseline - padding, ceiling + padding
+
     if change_percent is None or abs(change_percent) < 1e-12:
         line_color = "#9aa0a6"
     elif change_percent > 0:
-        line_color = "#81c995"
+        line_color = "#55e982"
     else:
-        line_color = "#f28b82"
-    ax.plot(x, y, linewidth=2.8, color=line_color, solid_capstyle="round", solid_joinstyle="round", antialiased=True, zorder=4)
-    ax.fill_between(x, y, chart_bottom, color=line_color, alpha=0.10, zorder=1, antialiased=True)
+        line_color = "#f26b63"
+
+    ax.plot(x, y, linewidth=2.55, color=line_color, solid_capstyle="round", solid_joinstyle="round", antialiased=True, zorder=4)
+    ax.fill_between(x, y, chart_bottom, color=line_color, alpha=0.11, zorder=1, antialiased=True)
     if previous is not None:
-        ax.axhline(previous, linewidth=1.1, linestyle=(0, (1.5, 4)), color="#c3c7cf", alpha=0.7, zorder=2, antialiased=True)
-        ax.text(1.005, previous, f"Prev\nclose\n{previous:.6g}", transform=ax.get_yaxis_transform(), ha="left", va="center", fontsize=9, color="#d4d7dd", linespacing=1.05)
-    ax.scatter([x[-1]], [y[-1]], s=52, color=line_color, edgecolor="#3c4043", linewidth=1.4, zorder=6, antialiased=True)
+        ax.axhline(previous, linewidth=1.0, linestyle=(0, (5, 6)), color="#e4e7eb", alpha=0.85, zorder=2)
+        ax.text(1.002, previous, f"Prev close\n{previous:.2f}", transform=ax.get_yaxis_transform(), ha="left", va="center", fontsize=8.5, color="#d5d8de", linespacing=1.08)
+    ax.scatter([x[-1]], [y[-1]], s=50, color=line_color, edgecolor="#202124", linewidth=1.5, zorder=6, antialiased=True)
     ax.set_ylim(chart_bottom, chart_top)
-    ax.grid(axis="y", color="#5f6368", linestyle="-", linewidth=0.75, alpha=0.42)
-    ax.grid(axis="x", visible=False)
+    ax.grid(axis="y", color="#34373b", linestyle="-", linewidth=0.65, alpha=0.75)
+    ax.grid(axis="x", color="#34373b", linestyle="--", linewidth=0.55, alpha=0.55)
     for spine in ax.spines.values():
         spine.set_visible(False)
-    ax.tick_params(colors="#d0d3da", labelsize=9, length=0, pad=9)
+    ax.tick_params(colors="#d7dbe2", labelsize=8.5, length=0, pad=8)
     ax.yaxis.tick_right()
     locator = mdates.AutoDateLocator(minticks=4, maxticks=6)
     ax.xaxis.set_major_locator(locator)
     ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator))
-    price_line = f"{last_price:.6g}{currency_text}"
+    ax.set_xlim(x[0], x[-1])
+
+    price_line = f"{last_price:.2f}{currency_text}"
     if change_percent is not None:
         price_line += f"  {change_percent:+.2f}%"
-    ax.set_title(f"{symbol.upper()}\n{price_line}", loc="left", color="#f8fafc", fontsize=20, fontweight="bold", pad=16, linespacing=1.25)
-    ax.text(1.0, 1.075, timeframe.upper(), transform=ax.transAxes, ha="right", va="bottom", color="#b8bdc7", fontsize=9, fontweight="bold")
-    fig.subplots_adjust(left=0.035, right=0.89, top=0.79, bottom=0.35)
+    ax.text(0.0, 1.19, symbol.upper(), transform=ax.transAxes, ha="left", va="bottom", fontsize=20, fontweight="bold", color="#f8fafc")
+    ax.text(0.0, 1.065, price_line, transform=ax.transAxes, ha="left", va="bottom", fontsize=18, fontweight="bold", color=line_color if change_percent is not None else "#f8fafc")
+    ax.text(1.01, 1.19, "7 Sep 2026", transform=ax.transAxes, ha="right", va="bottom", fontsize=8.5, color="#b9bec7")
 
-    # Compact three-column stats layout.
+    # Static visual timeframe selector, matching the reference chart style.
+    selector = ["1D", "5D", "1M", "6M", "YTD", "1Y", "5Y"]
+    start_x = 0.67
+    step = 0.047
+    for idx, item in enumerate(selector):
+        label, color = _period_button_label(timeframe, item)
+        xpos = start_x + idx * step
+        ax.text(xpos, 1.19, label, transform=ax.transAxes, ha="center", va="bottom", fontsize=10.5, fontweight="bold" if label.startswith("●") else "normal", color=color)
+    if any(timeframe.upper().startswith(v) for v in ["1D", "5D", "1M", "3M", "6M", "YTD", "1Y", "5Y"]):
+        selected = next((v for v in selector if timeframe.upper().startswith(v)), None)
+        if selected:
+            idx = selector.index(selected)
+            xpos = start_x + idx * step
+            ax.text(xpos, 1.255, "▰", transform=ax.transAxes, ha="center", va="bottom", fontsize=15, color="#7aa7ff")
+
+    ax.text(1.0, -0.105, timeframe.upper(), transform=ax.transAxes, ha="right", va="top", color="#b8bdc7", fontsize=8.5, fontweight="bold")
+
+    fig.text(0.035, 0.255, "", color="#ffffff")
+    fig.text(0.035, 0.285, "", color="#ffffff")
+    fig.add_artist(plt.Line2D([0.035, 0.93], [0.275, 0.275], transform=fig.transFigure, color="#34373b", linewidth=0.9))
+
     rows = [
         [("Open", stats["Open"]), ("Mkt cap", _fmt_value(quote.market_cap) if quote else "n/a"), ("Dividend", _fmt_meta(quote.dividend_yield, percent=True) if quote else "n/a")],
         [("High", stats["High"]), ("P/E ratio", _fmt_meta(quote.pe_ratio) if quote else "n/a"), ("After hours", _after_hours(quote))],
         [("Low", stats["Low"]), ("52-wk high", _fmt_value(quote.year_high) if quote else "n/a"), ("52-wk low", _fmt_value(quote.year_low) if quote else "n/a")],
     ]
-    y_positions = [0.285, 0.245, 0.205]
-    x_positions = [0.055, 0.36, 0.665]
+    y_positions = [0.225, 0.183, 0.141]
+    x_positions = [0.048, 0.37, 0.685]
     value_offsets = [0.105, 0.105, 0.105]
     for ypos, row in zip(y_positions, rows):
         for xpos, (label, value), offset in zip(x_positions, row, value_offsets):
-            fig.text(xpos, ypos, label, ha="left", va="center", fontsize=9.0, color="#9aa0a6")
-            fig.text(xpos + offset, ypos, value, ha="left", va="center", fontsize=10.0, fontweight="bold", color="#f8fafc")
+            fig.text(xpos, ypos, label, ha="left", va="center", fontsize=8.9, color="#9aa0a6")
+            fig.text(xpos + offset, ypos, value, ha="left", va="center", fontsize=9.7, fontweight="bold", color="#f8fafc")
 
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=_STANDARD_DPI, bbox_inches="tight", pad_inches=0.08, facecolor=fig.get_facecolor(), edgecolor="none", pil_kwargs={"compress_level": 1})
+    fig.savefig(buf, format="png", dpi=_STANDARD_DPI, bbox_inches="tight", pad_inches=0.06, facecolor=fig.get_facecolor(), edgecolor="none", pil_kwargs={"compress_level": 1})
     plt.close(fig)
     buf.seek(0)
     return buf
