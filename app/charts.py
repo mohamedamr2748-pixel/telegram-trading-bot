@@ -85,7 +85,7 @@ def _infer_previous_close(series: pd.Series, timeframe: str) -> float | None:
     upper = timeframe.upper()
     if upper.startswith("1D"):
         # A one-day intraday request usually contains only today's session.
-        # Do not incorrectly label the penultimate intraday point as prev close.
+        # The caller should supply the real previous close from the quote.
         return None
 
     if upper.startswith("5D"):
@@ -127,6 +127,27 @@ async def render_google_finance_chart(
 
     display_index = _display_index(work.index, symbol)
     series = pd.Series(work["Close"].to_numpy(dtype=float), index=display_index)
+
+    # Google-style colouring must use the real daily move versus the
+    # previous trading-day close, not the direction of the plotted line.
+    # Fetch the quote here when the caller has not supplied those values so
+    # 1D charts have a reliable previous close as well.
+    if prev_close is None or price is None or change_percent is None:
+        try:
+            from app.market import MarketService
+
+            quote = await MarketService().get_quote(symbol)
+            if price is None:
+                price = quote.price
+            if change_percent is None:
+                change_percent = quote.change_percent
+            if prev_close is None and quote.change_percent is not None and quote.change_percent > -100:
+                prev_close = quote.price / (1.0 + quote.change_percent / 100.0)
+        except Exception:
+            # Keep chart rendering available if the quote endpoint is
+            # temporarily unavailable; historical data can still render.
+            pass
+
     last_price = price if price is not None else float(series.iloc[-1])
     previous = prev_close if prev_close is not None else _infer_previous_close(series, timeframe)
     if change_percent is None and previous and previous > 0:
@@ -134,8 +155,8 @@ async def render_google_finance_chart(
 
     currency_text = f" {currency}" if currency else ""
 
-    fig, ax = plt.subplots(figsize=(12.8, 7.1), dpi=160, facecolor="#0b1220")
-    ax.set_facecolor("#36383f")
+    fig, ax = plt.subplots(figsize=(12.8, 7.1), dpi=160, facecolor="#202124")
+    ax.set_facecolor("#3c4043")
 
     x = series.index.to_pydatetime()
     y = series.to_numpy(dtype=float)
@@ -146,9 +167,12 @@ async def render_google_finance_chart(
     chart_bottom = baseline - padding
     chart_top = ceiling + padding
 
-    positive = change_percent is None or change_percent >= 0
-    line_color = "#81c995" if positive else "#f28b82"
-    muted = "#b8bdc7"
+    if change_percent is None or abs(change_percent) < 1e-12:
+        line_color = "#9aa0a6"
+    elif change_percent > 0:
+        line_color = "#81c995"
+    else:
+        line_color = "#f28b82"
 
     ax.plot(x, y, linewidth=2.4, color=line_color, solid_capstyle="round", zorder=4)
     ax.fill_between(x, y, chart_bottom, color=line_color, alpha=0.10, zorder=1)
@@ -167,10 +191,10 @@ async def render_google_finance_chart(
             linespacing=1.05,
         )
 
-    ax.scatter([x[-1]], [y[-1]], s=42, color=line_color, edgecolor="#36383f", linewidth=1.2, zorder=6)
+    ax.scatter([x[-1]], [y[-1]], s=42, color=line_color, edgecolor="#3c4043", linewidth=1.2, zorder=6)
     ax.set_ylim(chart_bottom, chart_top)
 
-    ax.grid(axis="y", color="#5a5e66", linestyle="-", linewidth=0.7, alpha=0.42)
+    ax.grid(axis="y", color="#5f6368", linestyle="-", linewidth=0.7, alpha=0.42)
     ax.grid(axis="x", visible=False)
     for spine in ax.spines.values():
         spine.set_visible(False)
