@@ -17,6 +17,7 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
+          from textwrap import dedent
 
           path = Path('app/bot.py')
           text = path.read_text(encoding='utf-8')
@@ -25,7 +26,8 @@ jobs:
           start = text.index(start_marker)
           end = text.index(end_marker, start)
 
-          replacement = '''@router.message(Command("account"))
+          replacement = dedent('''
+          @router.message(Command("account"))
           async def account(message: Message) -> None:
               from datetime import date
               from app.db import Usage
@@ -61,8 +63,8 @@ jobs:
                       f"Why               <code>{usage.get('why', 0)} / 3</code>\\n"
                       f"Advanced          <code>{usage.get('advanced', 0)} / 3</code>"
                   )
-          '''
-          replacement = replacement.replace('          ', '', 1)
+          ''').lstrip()
+
           path.write_text(text[:start] + replacement.rstrip() + text[end:], encoding='utf-8')
           PY
       - name: Validate
