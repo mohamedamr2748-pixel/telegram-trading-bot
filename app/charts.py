@@ -24,15 +24,7 @@ _CHART_STYLE = mpf.make_mpf_style(
     gridstyle=":",
     gridaxis="both",
     y_on_right=True,
-    rc={
-        "axes.labelsize": 10,
-        "axes.titlesize": 15,
-        "xtick.labelsize": 9,
-        "ytick.labelsize": 9,
-        "font.size": 10,
-        "figure.dpi": _ADVANCED_DPI,
-        "savefig.dpi": _ADVANCED_DPI,
-    },
+    rc={"axes.labelsize": 10, "axes.titlesize": 15, "xtick.labelsize": 9, "ytick.labelsize": 9, "font.size": 10, "figure.dpi": _ADVANCED_DPI, "savefig.dpi": _ADVANCED_DPI},
 )
 
 
@@ -171,16 +163,7 @@ async def _correct_yfinance_previous_close(symbol: str, quote: MarketQuote | Non
     return quote.previous_close
 
 
-async def render_google_finance_chart(
-    df: pd.DataFrame,
-    symbol: str,
-    timeframe: str,
-    prev_close: float | None = None,
-    price: float | None = None,
-    currency: str | None = None,
-    change_percent: float | None = None,
-    quote: MarketQuote | None = None,
-) -> io.BytesIO:
+async def render_google_finance_chart(df: pd.DataFrame, symbol: str, timeframe: str, prev_close: float | None = None, price: float | None = None, currency: str | None = None, change_percent: float | None = None, quote: MarketQuote | None = None) -> io.BytesIO:
     if "Close" not in df.columns:
         raise ValueError("Chart requires a Close/price series")
     work = df.copy()
@@ -192,14 +175,12 @@ async def render_google_finance_chart(
         raise ValueError("No valid price points available for chart")
     if len(work) > 2500:
         work = work.iloc[-2500:]
-
     if quote is None and (prev_close is None or price is None or change_percent is None):
         try:
             from app.market import MarketService
             quote = await MarketService().get_quote(symbol)
         except Exception:
             quote = None
-
     if quote is not None:
         price = quote.price if price is None else price
         currency = currency or ("USD" if quote.asset_class in {"stock", "index", "commodity", "metal", "forex", "market"} else None)
@@ -210,14 +191,12 @@ async def render_google_finance_chart(
             change_percent = ((price if price is not None else quote.price) / prev_close - 1.0) * 100.0
         elif change_percent is None:
             change_percent = quote.change_percent
-
     display_index = _display_index(work.index, symbol)
     series = pd.Series(work["Close"].to_numpy(dtype=float), index=display_index)
     last_price = price if price is not None else float(series.iloc[-1])
     previous = prev_close if prev_close and prev_close > 0 else None
     if change_percent is None and previous:
         change_percent = (last_price / previous - 1.0) * 100.0
-
     period_perf = _period_performance(series, timeframe, change_percent)
     stats = _session_stats(work, symbol)
     currency_text = f" {currency}" if currency else ""
@@ -230,14 +209,12 @@ async def render_google_finance_chart(
     spread = ceiling - baseline
     padding = max(spread * 0.22, abs(last_price) * 0.0025, 0.01)
     chart_bottom, chart_top = baseline - padding, ceiling + padding
-
     if change_percent is None or abs(change_percent) < 1e-12:
         line_color = "#9aa0a6"
     elif change_percent > 0:
         line_color = "#81c995"
     else:
         line_color = "#f28b82"
-
     ax.plot(x, y, linewidth=2.8, color=line_color, solid_capstyle="round", solid_joinstyle="round", antialiased=True, zorder=4)
     ax.fill_between(x, y, chart_bottom, color=line_color, alpha=0.10, zorder=1, antialiased=True)
     if previous is not None:
@@ -259,8 +236,9 @@ async def render_google_finance_chart(
         price_line += f"  {change_percent:+.2f}%"
     ax.set_title(f"{symbol.upper()}\n{price_line}", loc="left", color="#f8fafc", fontsize=20, fontweight="bold", pad=16, linespacing=1.25)
     ax.text(1.0, 1.075, timeframe.upper(), transform=ax.transAxes, ha="right", va="bottom", color="#b8bdc7", fontsize=9, fontweight="bold")
+    fig.subplots_adjust(left=0.035, right=0.89, top=0.79, bottom=0.34)
 
-    # Three compact columns, three rows, matching the reference layout.
+    # Reference layout: three label/value pairs per row.
     rows = [
         [("Open", stats["Open"]), ("Mkt cap", _fmt_value(quote.market_cap) if quote else "n/a"), ("Dividend", _fmt_meta(quote.dividend_yield, percent=True) if quote else "n/a")],
         [("High", stats["High"]), ("P/E ratio", _fmt_meta(quote.pe_ratio) if quote else "n/a"), ("After hours", _after_hours(quote))],
@@ -273,32 +251,16 @@ async def render_google_finance_chart(
             fig.text(xpos, ypos, label, ha="left", va="center", fontsize=9.0, color="#9aa0a6")
             fig.text(xpos + 0.14, ypos, value, ha="left", va="center", fontsize=10.0, fontweight="bold", color="#f8fafc")
 
-    # Keep the statistics block visually separated from the chart.
-    fig.text(0.055, 0.325, "SESSION / FUNDAMENTALS", ha="left", va="center", fontsize=7.5, fontweight="bold", color="#6f7785")
-
     buf = io.BytesIO()
-    fig.subplots_adjust(left=0.035, right=0.89, top=0.79, bottom=0.34)
     fig.savefig(buf, format="png", dpi=_STANDARD_DPI, bbox_inches="tight", pad_inches=0.08, facecolor=fig.get_facecolor(), edgecolor="none", pil_kwargs={"compress_level": 1})
     plt.close(fig)
     buf.seek(0)
     return buf
 
 
-async def render_chart(
-    df: pd.DataFrame,
-    symbol: str,
-    timeframe: str,
-    advanced: bool = False,
-    *,
-    prev_close: float | None = None,
-    price: float | None = None,
-    currency: str | None = None,
-    change_percent: float | None = None,
-    quote: MarketQuote | None = None,
-) -> io.BytesIO:
+async def render_chart(df: pd.DataFrame, symbol: str, timeframe: str, advanced: bool = False, *, prev_close: float | None = None, price: float | None = None, currency: str | None = None, change_percent: float | None = None, quote: MarketQuote | None = None) -> io.BytesIO:
     if not advanced:
         return await render_google_finance_chart(df, symbol, timeframe, prev_close=prev_close, price=price, currency=currency, change_percent=change_percent, quote=quote)
-
     work = _clean_ohlcv(df)
     enriched = add_advanced_indicators(work)
     has_volume = "Volume" in enriched.columns
@@ -306,7 +268,6 @@ async def render_chart(
     rsi_panel = 2 if has_volume else 1
     macd_panel = 3 if has_volume else 2
     plots = []
-
     if "EMA20" in enriched:
         plots.append(_line(enriched["EMA20"], 0, "#fbbf24", 1.15))
     if "EMA50" in enriched:
@@ -320,7 +281,6 @@ async def render_chart(
     if {"MACD", "MACD_SIGNAL"}.issubset(enriched.columns):
         histogram = enriched["MACD"] - enriched["MACD_SIGNAL"]
         plots.extend([mpf.make_addplot(histogram.clip(lower=0), type="bar", panel=macd_panel, color="#22c55e", alpha=0.55, width=0.7), mpf.make_addplot(histogram.clip(upper=0), type="bar", panel=macd_panel, color="#ef4444", alpha=0.55, width=0.7), _line(enriched["MACD"], macd_panel, "#60a5fa", 1.0), _line(enriched["MACD_SIGNAL"], macd_panel, "#f59e0b", 1.0), _line(pd.Series(0.0, index=enriched.index), macd_panel, "#64748b", 0.5, "--")])
-
     ratios = [6]
     if has_volume:
         ratios.append(1.8)
