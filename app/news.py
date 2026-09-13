@@ -38,9 +38,9 @@ _COMPANY_KEYWORDS = {
     "INTC": ("intel", "intel foundry"), "JPM": ("jpmorgan", "jp morgan", "jamie dimon"),
     "NFLX": ("netflix"), "ORCL": ("oracle", "oci"), "CRM": ("salesforce", "slack"),
     "MU": ("micron", "dram", "nand"), "QCOM": ("qualcomm", "snapdragon"), "BA": ("boeing", "737", "787"),
-    "WMT": ("walmart"), "XOM": ("exxon", "exxonmobil", "exxon mobil"), "CVX": ("chevron"),
+    "WMT": ("walmart",), "XOM": ("exxon", "exxonmobil", "exxon mobil"), "CVX": ("chevron",),
     "SPY": ("s&p 500", "sp500", "sp 500"), "QQQ": ("nasdaq 100", "nasdaq-100", "qqq"),
-    "IWM": ("russell 2000", "russell 2000", "iwm"), "BTCUSD": ("bitcoin", "btc"),
+    "IWM": ("russell 2000", "iwm"), "BTCUSD": ("bitcoin", "btc"),
     "ETHUSD": ("ethereum", "ether", "eth"), "XAUUSD": ("gold", "xau", "bullion"),
     "EURUSD": ("eur/usd", "euro", "eurusd"), "GBPUSD": ("gbp/usd", "pound", "sterling", "gbpusd"),
     "USDJPY": ("usd/jpy", "yen", "usdjpy"),
@@ -48,7 +48,7 @@ _COMPANY_KEYWORDS = {
 
 _MARKET_TERMS = (
     "stock", "stocks", "shares", "share price", "earnings", "revenue", "profit", "sales", "forecast", "guidance",
-    "analyst", "price target", "target", "valuation", "investor", "market", "trading", "price", "dividend",
+    "analyst", "price target", "target", "valuation", "investor", "investors", "market", "trading", "price", "dividend",
     "buyback", "upgrade", "downgrade", "estimate", "outlook", "demand", "supply", "tariff", "regulation",
     "lawsuit", "acquisition", "merger", "partnership", "semiconductor", "chip", "gpu", "ai", "cloud",
     "margin", "capex", "cash flow", "credit", "bond", "yield", "rate", "fed", "inflation", "jobs",
@@ -58,17 +58,22 @@ _MARKET_TERMS = (
 _DIRECT_MARKET_PHRASES = (
     "shares", "stock", "share price", "earnings", "revenue", "profit", "sales", "guidance", "forecast",
     "analyst", "price target", "valuation", "market cap", "buyback", "dividend", "upgrade", "downgrade",
-    "estimate", "outlook", "investor", "acquisition", "merger", "lawsuit", "regulation", "tariff",
+    "estimate", "outlook", "investor", "investors", "acquisition", "merger", "lawsuit", "regulation", "tariff",
 )
 
-_SECONDARY_BUSINESS_PHRASES = (
-    "launches", "launch", "new product", "product", "iphone", "ipad", "mac", "chip", "factory", "manufacturing",
-    "partnership", "contract", "deal", "expands", "expansion", "opens", "service", "cloud",
+_BUSINESS_IMPACT_PHRASES = (
+    "demand", "sales", "revenue", "margin", "manufacturing", "factory", "production", "supply chain", "contract",
+    "deal", "partnership", "launch", "launches", "new product", "product", "chip", "cloud", "capacity", "orders",
 )
 
 _LISTICLE_TERMS = (
     "and more", "five stocks", "six stocks", "seven stocks", "eight stocks", "10 stocks", "top stocks",
     "stocks investors", "stocks to watch", "best stocks", "stocks worth", "couldn't stop buzzing", "cannot stop buzzing",
+)
+
+_BROAD_ROUNDUP_TERMS = (
+    "dow jones futures", "stock market today", "stock market", "market today", "stocks rise", "stocks fall",
+    "stocks gain", "stocks slide", "market roundup", "market wrap", "morning briefing",
 )
 
 _IRRELEVANT_TERMS = (
@@ -129,17 +134,16 @@ NEWS_SOURCES: tuple[NewsSource, ...] = (
 def _search_terms(symbol: str) -> list[str]:
     symbol = symbol.strip().upper()
     alias = _COMPANY_ALIASES.get(symbol)
-    terms = [symbol]
-    if alias and alias.lower() != symbol.lower():
-        terms.append(alias)
-    return terms
+    if not alias:
+        return [symbol]
+    return [symbol, alias]
 
 
 def _asset_route(symbol: str) -> str:
     symbol = symbol.upper()
     if symbol in {"BTCUSD", "ETHUSD"}:
         return "crypto"
-    if symbol in {"XAUUSD"}:
+    if symbol == "XAUUSD":
         return "gold"
     if symbol in {"EURUSD", "GBPUSD", "USDJPY"}:
         return "fx"
@@ -229,6 +233,42 @@ def _is_recent(published_at: datetime | None, hours: int) -> bool:
     return published_at >= cutoff
 
 
+def _contains_phrase(title: str, phrase: str) -> bool:
+    return phrase.lower() in title
+
+
+def _search_query(symbol: str, source: NewsSource) -> str:
+    symbol = symbol.upper()
+    alias = _COMPANY_ALIASES.get(symbol, symbol)
+    route = _asset_route(symbol)
+
+    if route == "equity":
+        # Do not search the bare company name. That is what caused consumer,
+        # entertainment and unrelated stories such as Apple TV/MCP content to leak in.
+        phrases = [
+            f'"{symbol}"',
+            f'"{alias} shares"',
+            f'"{alias} stock"',
+            f'"{alias} earnings"',
+            f'"{alias} revenue"',
+            f'"{alias} guidance"',
+            f'"{alias} analyst"',
+            f'"{alias} investors"',
+            f'"{alias} price target"',
+        ]
+        if symbol in {"AAPL", "MSFT", "NVDA", "AMZN", "META", "GOOGL", "GOOG", "TSLA"}:
+            phrases.append(f'"{alias} demand"')
+        query = " OR ".join(phrases)
+    elif route == "crypto":
+        query = f'"{alias}" OR "{symbol}" market OR price OR crypto'
+    elif route == "gold":
+        query = '"gold" OR "XAUUSD" price OR market OR bullion'
+    else:
+        query = f'"{alias}" OR "{symbol}" forex OR currency OR rate'
+
+    return f"({query}) site:{source.domain} when:1d"
+
+
 def _title_relevance(item: NewsItemDTO, symbol: str, terms: list[str]) -> tuple[bool, float]:
     title = _normalise_title(item.title)
     if any(bad in title for bad in _IRRELEVANT_TERMS):
@@ -236,52 +276,72 @@ def _title_relevance(item: NewsItemDTO, symbol: str, terms: list[str]) -> tuple[
     if not _source_allowed_for_route(item, symbol):
         return False, -1000.0
 
-    target_terms = list(terms) + list(_COMPANY_KEYWORDS.get(symbol, ()))
-    target_terms = [term.lower() for term in target_terms]
-    target_hits = sum(1 for term in target_terms if term in title)
-    if target_hits == 0:
+    route = _asset_route(symbol)
+    alias = _COMPANY_ALIASES.get(symbol, symbol).lower()
+    ticker_hit = bool(re.search(rf"\b{re.escape(symbol.lower())}\b", title))
+    alias_hit = alias in title
+    keyword_hits = sum(1 for term in _COMPANY_KEYWORDS.get(symbol, ()) if term.lower() in title)
+
+    if not ticker_hit and not alias_hit and keyword_hits == 0:
         return False, -1000.0
 
-    market_hits = sum(1 for term in _MARKET_TERMS if term in title)
     direct_hits = sum(1 for term in _DIRECT_MARKET_PHRASES if term in title)
-    secondary_hits = sum(1 for term in _SECONDARY_BUSINESS_PHRASES if term in title)
+    business_hits = sum(1 for term in _BUSINESS_IMPACT_PHRASES if term in title)
     listicle_hits = sum(1 for term in _LISTICLE_TERMS if term in title)
+    broad_hits = sum(1 for term in _BROAD_ROUNDUP_TERMS if term in title)
 
-    # For equities, a direct trading context is the default requirement. Purely
-    # consumer/product stories are retained only as lower-priority secondary news.
-    if symbol not in {"SPY", "QQQ", "IWM", "BTCUSD", "ETHUSD", "XAUUSD", "EURUSD", "GBPUSD", "USDJPY"}:
-        if direct_hits == 0 and secondary_hits == 0:
-            return False, -1000.0
-        if direct_hits == 0 and secondary_hits > 0:
-            score = 25.0 + target_hits * 12.0 + secondary_hits * 4.0
-        else:
-            score = 80.0 + target_hits * 30.0 + min(direct_hits, 5) * 18.0 + min(market_hits, 4) * 7.0
-    else:
-        score = 70.0 + target_hits * 30.0 + min(market_hits, 5) * 10.0
-
-    # The target should be the subject, not merely one item in a multi-stock list.
-    if symbol.lower() in title:
-        score += 35.0
-    alias = _COMPANY_ALIASES.get(symbol)
-    if alias and alias.lower() in title:
-        score += 18.0
-
-    # AAPL-specific market phrasing such as "Apple shares" is materially stronger
-    # than simply mentioning "Apple" in a broad market roundup.
-    if alias:
-        direct_company_patterns = tuple(
-            f"{alias.lower()} {phrase}" for phrase in _DIRECT_MARKET_PHRASES
+    if route == "equity":
+        # For a single equity, the company must be the actual subject of the story.
+        # A ticker is the strongest entity signal. Bare company-name mentions in a
+        # roundup/listicle are not enough.
+        company_context = any(
+            phrase in title
+            for phrase in (
+                f"{alias} shares", f"{alias} stock", f"{alias} earnings", f"{alias} revenue",
+                f"{alias} guidance", f"{alias} analyst", f"{alias} investors", f"{alias} price",
+                f"{alias} valuation", f"{alias} demand", f"{alias} sales", f"{alias} profit",
+            )
         )
-        if any(pattern in title for pattern in direct_company_patterns):
+
+        # Explicit listicles/"five stocks" roundups are poor single-ticker news.
+        if listicle_hits and not ticker_hit:
+            return False, -1000.0
+
+        # Generic market headlines that only mention the company in passing should
+        # not enter the primary result set unless the ticker itself is explicit.
+        if broad_hits and not ticker_hit and not company_context:
+            return False, -1000.0
+
+        if not ticker_hit and not company_context:
+            # Business-impact pieces (e.g. product/demand/manufacturing) can still
+            # matter for the stock, but they rank below direct market stories.
+            if business_hits == 0:
+                return False, -1000.0
+
+        score = 55.0
+        if ticker_hit:
+            score += 45.0
+        if company_context:
             score += 35.0
+        score += min(keyword_hits, 3) * 8.0
+        score += min(direct_hits, 5) * 18.0
+        score += min(business_hits, 3) * 6.0
 
+        if listicle_hits:
+            score -= 60.0 * listicle_hits
+        if broad_hits:
+            score -= 28.0 * broad_hits
+        if title.startswith("latest ") and "stock news" in title:
+            score -= 10.0
+        return True, score
+
+    # Macro/asset-specific routes can use broader headlines because the asset is
+    # itself the market concept (gold, forex, bitcoin, etc.).
+    market_hits = sum(1 for term in _MARKET_TERMS if term in title)
+    score = 65.0 + (35.0 if ticker_hit else 0.0) + (20.0 if alias_hit else 0.0)
+    score += min(market_hits, 5) * 8.0
     if listicle_hits:
-        score -= 45.0 * listicle_hits
-    if "dow jones futures" in title or "stock market today" in title:
-        score -= 25.0
-    if title.startswith("latest ") and "stock news" in title:
-        score -= 10.0
-
+        score -= 25.0 * listicle_hits
     return True, score
 
 
@@ -355,9 +415,8 @@ class NewsService:
         self.rss = RSSNewsProvider()
         self._semaphore = asyncio.Semaphore(10)
 
-    async def _search_source(self, source: NewsSource, terms: list[str], limit: int) -> list[NewsItemDTO]:
-        query_terms = " OR ".join(f'"{term}"' for term in terms)
-        query = f"({query_terms}) site:{source.domain}"
+    async def _search_source(self, source: NewsSource, symbol: str, limit: int) -> list[NewsItemDTO]:
+        query = _search_query(symbol, source)
         async with self._semaphore:
             try:
                 return await self.google.search(query, limit)
@@ -395,13 +454,14 @@ class NewsService:
         per_source_limit = max(4, min(7, limit + 1))
 
         source_batches = await asyncio.gather(
-            *(self._search_source(source, terms, per_source_limit) for source in sources)
+            *(self._search_source(source, symbol, per_source_limit) for source in sources)
         )
         google_items = [item for batch in source_batches for item in batch]
 
         gdelt_items: list[NewsItemDTO] = []
         try:
-            gdelt_query = f'({" OR ".join(terms)})'
+            alias = _COMPANY_ALIASES.get(symbol, symbol)
+            gdelt_query = f'("{symbol}" OR "{alias} shares" OR "{alias} stock" OR "{alias} earnings" OR "{alias} revenue")'
             gdelt_items = await self.gdelt.search(gdelt_query, max(20, limit * 4), timespan="48h")
         except Exception:
             gdelt_items = []
@@ -409,7 +469,6 @@ class NewsService:
         custom_items = await self.rss.fetch(settings.rss_urls, limit=max(3, limit // 2)) if settings.rss_urls else []
         candidates = google_items + gdelt_items + custom_items
 
-        # Reject stale, route-incompatible, and clearly non-trading candidates before ranking.
         candidates = [
             item for item in candidates
             if _is_recent(item.published_at, 24)
@@ -432,7 +491,6 @@ class NewsService:
             seen_urls.add(url_key)
             ranked.append(item)
 
-        # Keep publisher diversity without letting a weak broad-market source crowd out stronger direct stories.
         output: list[NewsItemDTO] = []
         per_source_count: dict[str, int] = {}
         for item in ranked:
@@ -449,9 +507,8 @@ class NewsService:
             if len(output) >= limit:
                 break
 
-        # Fallback is still allowed, but it must satisfy the same relevance gate.
         if len(output) < min(3, limit):
-            fallback_query = f'("{terms[0]}" OR "{terms[1]}") (stock OR shares OR earnings OR analyst OR market OR price)'
+            fallback_query = _search_query(terms[0] if terms else symbol, NEWS_SOURCES[0]).replace("site:reuters.com", "")
             try:
                 fallback = await self.google.search(fallback_query, max(limit * 2, 8))
             except Exception:
