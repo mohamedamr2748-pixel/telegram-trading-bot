@@ -20,11 +20,30 @@ logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.I
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Telegram Trading Intelligence Bot", version="0.1.0")
+db_ready = False
 
 
 @app.get("/health")
 async def health() -> JSONResponse:
-    return JSONResponse({"status": "ok"})
+    return JSONResponse({"status": "ok", "db_ready": db_ready})
+
+
+async def init_db_with_retry() -> None:
+    global db_ready
+    delay = 2
+    while True:
+        try:
+            await init_db()
+            db_ready = True
+            logger.info("Database initialization completed")
+            return
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            db_ready = False
+            logger.exception("Database initialization failed; retrying in %ss", delay)
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, 60)
 
 
 async def alert_loop(bot: Bot) -> None:
@@ -58,24 +77,30 @@ async def run_health_server() -> None:
 
 
 async def run_bot() -> None:
-    if not settings.bot_token.strip():
-        raise RuntimeError("BOT_TOKEN is required to start the Telegram bot.")
-
     health_server = asyncio.create_task(run_health_server())
-    await init_db()
-    bot = Bot(
-        token=settings.bot_token,
-        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
-    )
-    dp = build_dispatcher()
-    worker = asyncio.create_task(alert_loop(bot))
+    db_task = asyncio.create_task(init_db_with_retry())
+    bot: Bot | None = None
+    worker: asyncio.Task | None = None
     try:
+        if not settings.bot_token.strip():
+            raise RuntimeError("BOT_TOKEN is required to start the Telegram bot.")
+
+        bot = Bot(
+            token=settings.bot_token,
+            default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+        )
+        dp = build_dispatcher()
+        worker = asyncio.create_task(alert_loop(bot))
         await dp.start_polling(bot)
     finally:
-        worker.cancel()
+        if worker is not None:
+            worker.cancel()
+        db_task.cancel()
         health_server.cancel()
-        await asyncio.gather(worker, health_server, return_exceptions=True)
-        await bot.session.close()
+        tasks = [task for task in (worker, db_task, health_server) if task is not None]
+        await asyncio.gather(*tasks, return_exceptions=True)
+        if bot is not None:
+            await bot.session.close()
 
 
 if __name__ == "__main__":
