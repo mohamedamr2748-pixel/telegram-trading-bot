@@ -246,19 +246,27 @@ async def news_cmd(message: Message) -> None:
         return
     symbol = parts[1].strip().upper()
 
-    await message.answer(f"📩 Request received. Checking <b>{symbol}</b>...")
-
-    try:
-        await market.get_quote(symbol)
-    except Exception:
-        await message.answer(f"❌ <b>{symbol}</b> is not a valid or available ticker right now.")
-        return
-
-    await message.answer(f"🔎 <b>{symbol}</b> verified. Searching recent news...")
-
     if not await limit_or_message(message, "news"):
         return
-    items = await news.get(symbol, 8)
+
+    # Fast path: a fresh cache is authoritative for the next six hours.
+    # Do this before market verification so repeated /news requests do not
+    # wait on yfinance just to prove a ticker that is already cached.
+    await message.answer(f"📩 Request received. Checking cached news for <b>{symbol}</b>...")
+    cached_items = await news.get_fresh(symbol, 8)
+    if cached_items is not None:
+        items = cached_items
+    else:
+        # Cache miss/expired cache: validate the symbol before doing an
+        # external news search. The first request can still take longer.
+        try:
+            await market.get_quote(symbol)
+        except Exception:
+            await message.answer(f"❌ <b>{symbol}</b> is not a valid or available ticker right now.")
+            return
+        await message.answer(f"🔎 <b>{symbol}</b> verified. Searching recent news...")
+        items = await news.get(symbol, 8)
+
     if not items:
         await message.answer(f"📰 No recent news found for <b>{symbol}</b>.")
         return
