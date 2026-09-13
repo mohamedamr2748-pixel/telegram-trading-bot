@@ -463,11 +463,10 @@ async def market_cmd(message: Message) -> None:
     for symbol, quote in zip(symbols, quotes):
         label = _market_label(symbol)
         if isinstance(quote, Exception):
-            lines.append(f"🔴 <b>{label}</b>\n   unavailable\n")
+            lines.append(f"<b>{label}</b>\n   unavailable\n")
             continue
         pct = _move_badge(quote.change_percent)
-        emoji = "🟢" if (quote.change_percent or 0) > 0 else "🔴" if (quote.change_percent or 0) < 0 else "⚪"
-        lines.append(f"{emoji} <b>{label}</b>\n   <code>{quote.price:.6g}</code>  {pct}\n")
+        lines.append(f"<b>{label}</b>\n   <code>{quote.price:.6g}</code>  {pct}\n")
     lines.append("<i>Live snapshot • data sources may vary by asset</i>")
     await message.answer("\n".join(lines))
 
