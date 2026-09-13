@@ -14,12 +14,12 @@ from app.db import Alert, Watchlist, WatchlistItem, consume_usage, get_or_create
 from app.domain import MarketQuote
 from app.indicators import add_basic_indicators
 from app.market import MarketService
-from app.news import NewsService
+from app.news_cache import NewsCacheService
 from config import settings
 
 router = Router()
 market = MarketService()
-news = NewsService()
+news = NewsCacheService()
 
 LIMITS = {
     "price": 50,
@@ -258,7 +258,7 @@ async def news_cmd(message: Message) -> None:
 
     if not await limit_or_message(message, "news"):
         return
-    items = await news.search(symbol, 8)
+    items = await news.get(symbol, 8)
     if not items:
         await message.answer(f"📰 No recent news found for <b>{symbol}</b>.")
         return
@@ -279,7 +279,7 @@ async def why_cmd(message: Message) -> None:
         return
     try:
         quote = await market.get_quote(symbol)
-        items = await news.search(symbol, 5)
+        items = await news.get(symbol, 5)
     except Exception:
         await message.answer(f"❌ Could not analyse <b>{symbol}</b> right now.")
         return
@@ -509,7 +509,7 @@ async def brief(message: Message) -> None:
         return
     symbols = ["^GSPC", "^IXIC", "BTC-USD", "GC=F"]
     quotes = await asyncio.gather(*(market.get_quote(s) for s in symbols), return_exceptions=True)
-    news_items = await news.search("market", 5)
+    news_items = await news.get("market", 5)
     lines = ["🌅 <b>Daily Market Brief</b>", ""]
     for symbol, quote in zip(symbols, quotes):
         if not isinstance(quote, Exception):
@@ -547,7 +547,7 @@ async def news_callback(callback: CallbackQuery) -> None:
     symbol = callback.data.split(":", 1)[1]
     if not await _callback_limit(callback, "news"):
         return
-    items = await news.search(symbol, 6)
+    items = await news.get(symbol, 6)
     if not items:
         await callback.message.answer(f"📰 No recent news found for <b>{symbol}</b>.")
     else:
