@@ -239,7 +239,9 @@ async def render_google_finance_chart(df: pd.DataFrame, symbol: str, timeframe: 
     ax.yaxis.tick_right()
     locator = mdates.AutoDateLocator(minticks=4, maxticks=6)
     ax.xaxis.set_major_locator(locator)
-    ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator))
+    # Prevent Matplotlib from placing its date offset in the selector/header area.
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+    ax.xaxis.get_offset_text().set_visible(False)
     ax.set_xlim(x[0], x[-1])
 
     price_line = f"{last_price:.2f}{currency_text}"
@@ -248,7 +250,6 @@ async def render_google_finance_chart(df: pd.DataFrame, symbol: str, timeframe: 
     ax.text(0.0, 1.19, symbol.upper(), transform=ax.transAxes, ha="left", va="bottom", fontsize=20, fontweight="bold", color="#f8fafc")
     ax.text(0.0, 1.065, price_line, transform=ax.transAxes, ha="left", va="bottom", fontsize=18, fontweight="bold", color=line_color if change_percent is not None else "#f8fafc")
 
-    # Reference-style timeframe selector.
     selector = ["1D", "5D", "1M", "6M", "YTD", "1Y", "5Y"]
     selected = _selector_key(timeframe)
     start_x = 0.67
@@ -256,23 +257,16 @@ async def render_google_finance_chart(df: pd.DataFrame, symbol: str, timeframe: 
     for idx, item in enumerate(selector):
         xpos = start_x + idx * step
         if item == selected:
-            pill = FancyBboxPatch(
-                (xpos - 0.020, 1.145), 0.040, 0.085,
-                boxstyle="round,pad=0.008,rounding_size=0.018",
-                transform=ax.transAxes,
-                linewidth=0,
-                facecolor="#30343a",
-                edgecolor="none",
-                zorder=8,
-            )
+            pill = FancyBboxPatch((xpos - 0.020, 1.145), 0.040, 0.085, boxstyle="round,pad=0.008,rounding_size=0.018", transform=ax.transAxes, linewidth=0, facecolor="#30343a", edgecolor="none", zorder=8)
             ax.add_patch(pill)
             ax.text(xpos, 1.19, item, transform=ax.transAxes, ha="center", va="center", fontsize=10.5, fontweight="bold", color="#f8fafc", zorder=9)
         else:
             ax.text(xpos, 1.19, item, transform=ax.transAxes, ha="center", va="center", fontsize=10.5, color="#c7ccd4", zorder=8)
 
+    # Place the date only in the footer, matching the reference layout.
     chart_date = pd.Timestamp(x[-1]).strftime("%Y-%b-%d")
-    ax.text(1.0, 1.19, chart_date, transform=ax.transAxes, ha="right", va="center", fontsize=8.5, color="#b9bec7")
-    ax.text(1.0, -0.10, timeframe.upper(), transform=ax.transAxes, ha="right", va="top", color="#b8bdc7", fontsize=8.5, fontweight="bold")
+    ax.text(1.0, -0.105, chart_date, transform=ax.transAxes, ha="right", va="top", fontsize=8.5, color="#b9bec7")
+    ax.text(1.0, -0.145, timeframe.upper(), transform=ax.transAxes, ha="right", va="top", color="#b8bdc7", fontsize=8.0, fontweight="bold")
 
     fig.add_artist(plt.Line2D([0.035, 0.93], [0.262, 0.262], transform=fig.transFigure, color="#34373b", linewidth=0.9))
 
@@ -281,16 +275,15 @@ async def render_google_finance_chart(df: pd.DataFrame, symbol: str, timeframe: 
         [("High", stats["High"]), ("P/E ratio", _fmt_meta(quote.pe_ratio) if quote else "n/a"), ("After hours", _after_hours(quote))],
         [("Low", stats["Low"]), ("52-wk high", _fmt_value(quote.year_high) if quote else "n/a"), ("52-wk low", _fmt_value(quote.year_low) if quote else "n/a")],
     ]
-    y_positions = [0.222, 0.180, 0.138]
-    x_positions = [0.048, 0.37, 0.685]
-    value_offsets = [0.105, 0.105, 0.105]
+    y_positions = [0.225, 0.182, 0.139]
+    x_positions = [0.055, 0.36, 0.66]
     for ypos, row in zip(y_positions, rows):
-        for xpos, (label, value), offset in zip(x_positions, row, value_offsets):
-            fig.text(xpos, ypos, label, ha="left", va="center", fontsize=8.9, color="#9aa0a6")
-            fig.text(xpos + offset, ypos, value, ha="left", va="center", fontsize=9.7, fontweight="bold", color="#f8fafc")
+        for xpos, (label, value) in zip(x_positions, row):
+            fig.text(xpos, ypos, label, ha="left", va="center", fontsize=9.0, color="#9aa0a6")
+            fig.text(xpos + 0.10, ypos, value, ha="left", va="center", fontsize=10.0, fontweight="bold", color="#f8fafc")
 
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=_STANDARD_DPI, bbox_inches="tight", pad_inches=0.06, facecolor=fig.get_facecolor(), edgecolor="none", pil_kwargs={"compress_level": 1})
+    fig.savefig(buf, format="png", dpi=_STANDARD_DPI, bbox_inches="tight", pad_inches=0.08, facecolor=fig.get_facecolor(), edgecolor="none", pil_kwargs={"compress_level": 1})
     plt.close(fig)
     buf.seek(0)
     return buf
