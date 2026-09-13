@@ -92,6 +92,16 @@ def _fmt_meta(value: float | None, percent: bool = False) -> str:
     return f"{value:.2f}%" if percent else _fmt_value(value)
 
 
+def _price_digits(symbol: str, quote: MarketQuote | None) -> int:
+    asset = (quote.asset_class if quote else "").lower()
+    normalized = symbol.upper().replace("/", "").replace("-", "")
+    if asset == "forex" or normalized in {"EURUSD", "USDEUR", "GBPUSD", "USDGBP", "USDJPY", "JPYUSD", "AUDUSD", "USDAUD", "AUUSD", "USDCAD", "CADUSD", "USDCHF", "CHFUSD", "NZDUSD", "USDNZD"}:
+        return 5 if "JPY" not in normalized else 3
+    if asset == "crypto":
+        return 2
+    return 2
+
+
 def _period_performance(series: pd.Series, timeframe: str, daily_change: float | None) -> float | None:
     if series.empty:
         return None
@@ -144,6 +154,39 @@ def _pre_market(quote: MarketQuote | None) -> str:
         return "n/a"
     move = ((quote.pre_market_price / quote.previous_close) - 1) * 100 if quote.previous_close else None
     return f"{_fmt_value(quote.pre_market_price)}  ({_fmt_percent(move)})" if move is not None else _fmt_value(quote.pre_market_price)
+
+
+def _asset_stats_rows(symbol: str, quote: MarketQuote | None, stats: dict[str, str], change_percent: float | None) -> list[list[tuple[str, str]]]:
+    asset = (quote.asset_class if quote else "stock").lower()
+    normalized = symbol.upper().replace("/", "").replace("-", "")
+    digits = _price_digits(symbol, quote)
+
+    if asset == "forex" or normalized in {"EURUSD", "USDEUR", "GBPUSD", "USDGBP", "USDJPY", "JPYUSD", "AUDUSD", "USDAUD", "AUUSD", "USDCAD", "CADUSD", "USDCHF", "CHFUSD", "NZDUSD", "USDNZD"}:
+        return [
+            [("Open", _fmt_value(stats["Open"], digits)), ("Previous", _fmt_value(quote.previous_close, digits) if quote else "n/a"), ("Day change", _fmt_percent(change_percent))],
+            [("High", _fmt_value(stats["High"], digits)), ("52-wk high", _fmt_value(quote.year_high, digits) if quote else "n/a"), ("52-wk low", _fmt_value(quote.year_low, digits) if quote else "n/a")],
+            [("Low", _fmt_value(stats["Low"], digits)), ("Session", _status_text(quote)), ("Updated", quote.timestamp.strftime("%H:%M UTC") if quote else "n/a")],
+        ]
+
+    if asset == "crypto":
+        return [
+            [("Open", _fmt_value(stats["Open"])), ("Previous", _fmt_value(quote.previous_close) if quote else "n/a"), ("24h volume", _fmt_value(quote.volume, 0) if quote else stats["Volume"])],
+            [("High", _fmt_value(stats["High"])), ("52-wk high", _fmt_value(quote.year_high) if quote else "n/a"), ("52-wk low", _fmt_value(quote.year_low) if quote else "n/a")],
+            [("Low", _fmt_value(stats["Low"])), ("Session", _status_text(quote)), ("Updated", quote.timestamp.strftime("%H:%M UTC") if quote else "n/a")],
+        ]
+
+    if asset in {"metal", "commodity"}:
+        return [
+            [("Open", stats["Open"]), ("Previous", _fmt_value(quote.previous_close) if quote else "n/a"), ("Day change", _fmt_percent(change_percent))],
+            [("High", stats["High"]), ("52-wk high", _fmt_value(quote.year_high) if quote else "n/a"), ("52-wk low", _fmt_value(quote.year_low) if quote else "n/a")],
+            [("Low", stats["Low"]), ("Session", _status_text(quote)), ("Updated", quote.timestamp.strftime("%H:%M UTC") if quote else "n/a")],
+        ]
+
+    return [
+        [("Open", stats["Open"]), ("Mkt cap", _fmt_value(quote.market_cap) if quote else "n/a"), ("Dividend", _fmt_meta(quote.dividend_yield, percent=True) if quote else "n/a")],
+        [("High", stats["High"]), ("P/E ratio", _fmt_meta(quote.pe_ratio) if quote else "n/a"), ("After hours", _after_hours(quote))],
+        [("Low", stats["Low"]), ("52-wk high", _fmt_value(quote.year_high) if quote else "n/a"), ("52-wk low", _fmt_value(quote.year_low) if quote else "n/a")],
+    ]
 
 
 async def _correct_yfinance_previous_close(symbol: str, quote: MarketQuote | None, timeframe: str) -> float | None:
@@ -206,6 +249,7 @@ async def render_google_finance_chart(df: pd.DataFrame, symbol: str, timeframe: 
         change_percent = (last_price / previous - 1.0) * 100.0
     period_perf = _period_performance(series, timeframe, change_percent)
     stats = _session_stats(work, symbol)
+    digits = _price_digits(symbol, quote)
     currency_text = f" {currency}" if currency else ""
 
     fig = plt.figure(figsize=_STANDARD_FIGSIZE, dpi=_STANDARD_DPI, facecolor="#202124")
@@ -228,7 +272,7 @@ async def render_google_finance_chart(df: pd.DataFrame, symbol: str, timeframe: 
     ax.fill_between(x, y, chart_bottom, color=line_color, alpha=0.11, zorder=1, antialiased=True)
     if previous is not None:
         ax.axhline(previous, linewidth=1.0, linestyle=(0, (5, 6)), color="#e4e7eb", alpha=0.85, zorder=2)
-        ax.text(1.002, previous, f"Prev close\n{previous:.2f}", transform=ax.get_yaxis_transform(), ha="left", va="center", fontsize=8.5, color="#d5d8de", linespacing=1.08)
+        ax.text(1.002, previous, f"Prev close\n{previous:.{digits}f}", transform=ax.get_yaxis_transform(), ha="left", va="center", fontsize=8.5, color="#d5d8de", linespacing=1.08)
     ax.scatter([x[-1]], [y[-1]], s=50, color=line_color, edgecolor="#202124", linewidth=1.5, zorder=6, antialiased=True)
     ax.set_ylim(chart_bottom, chart_top)
     ax.grid(axis="y", color="#34373b", linestyle="-", linewidth=0.65, alpha=0.75)
@@ -239,12 +283,11 @@ async def render_google_finance_chart(df: pd.DataFrame, symbol: str, timeframe: 
     ax.yaxis.tick_right()
     locator = mdates.AutoDateLocator(minticks=4, maxticks=6)
     ax.xaxis.set_major_locator(locator)
-    # Prevent Matplotlib from placing its date offset in the selector/header area.
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
     ax.xaxis.get_offset_text().set_visible(False)
     ax.set_xlim(x[0], x[-1])
 
-    price_line = f"{last_price:.2f}{currency_text}"
+    price_line = f"{last_price:.{digits}f}{currency_text}"
     if change_percent is not None:
         price_line += f"  {change_percent:+.2f}%"
     ax.text(0.0, 1.19, symbol.upper(), transform=ax.transAxes, ha="left", va="bottom", fontsize=20, fontweight="bold", color="#f8fafc")
@@ -263,18 +306,13 @@ async def render_google_finance_chart(df: pd.DataFrame, symbol: str, timeframe: 
         else:
             ax.text(xpos, 1.19, item, transform=ax.transAxes, ha="center", va="center", fontsize=10.5, color="#c7ccd4", zorder=8)
 
-    # Place the date only in the footer, matching the reference layout.
     chart_date = pd.Timestamp(x[-1]).strftime("%Y-%b-%d")
     ax.text(1.0, -0.105, chart_date, transform=ax.transAxes, ha="right", va="top", fontsize=8.5, color="#b9bec7")
     ax.text(1.0, -0.145, timeframe.upper(), transform=ax.transAxes, ha="right", va="top", color="#b8bdc7", fontsize=8.0, fontweight="bold")
 
     fig.add_artist(plt.Line2D([0.035, 0.93], [0.262, 0.262], transform=fig.transFigure, color="#34373b", linewidth=0.9))
 
-    rows = [
-        [("Open", stats["Open"]), ("Mkt cap", _fmt_value(quote.market_cap) if quote else "n/a"), ("Dividend", _fmt_meta(quote.dividend_yield, percent=True) if quote else "n/a")],
-        [("High", stats["High"]), ("P/E ratio", _fmt_meta(quote.pe_ratio) if quote else "n/a"), ("After hours", _after_hours(quote))],
-        [("Low", stats["Low"]), ("52-wk high", _fmt_value(quote.year_high) if quote else "n/a"), ("52-wk low", _fmt_value(quote.year_low) if quote else "n/a")],
-    ]
+    rows = _asset_stats_rows(symbol, quote, stats, change_percent)
     y_positions = [0.225, 0.182, 0.139]
     x_positions = [0.055, 0.36, 0.66]
     for ypos, row in zip(y_positions, rows):
