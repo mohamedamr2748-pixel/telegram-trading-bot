@@ -17,6 +17,15 @@ class MarketQuote:
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     source: str = "unknown"
     market_status: str = "unknown"
+    previous_close: float | None = None
+    year_high: float | None = None
+    year_low: float | None = None
+    market_cap: float | None = None
+    pe_ratio: float | None = None
+    dividend_yield: float | None = None
+    eps: float | None = None
+    pre_market_price: float | None = None
+    post_market_price: float | None = None
 
     @property
     def is_stale(self) -> bool:
