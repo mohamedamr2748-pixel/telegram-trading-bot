@@ -25,25 +25,38 @@ _COMPANY_ALIASES = {
 }
 
 _COMPANY_KEYWORDS = {
-    "AAPL": ("apple", "iphone", "ipad", "mac", "tim cook", "app store"),
-    "MSFT": ("microsoft", "windows", "azure", "copilot", "office"),
-    "NVDA": ("nvidia", "gpu", "gpu chips", "jensen huang"),
-    "AMZN": ("amazon", "aws", "prime", "jeff bezos"),
-    "META": ("meta", "facebook", "instagram", "whatsapp", "zuckerberg"),
-    "TSLA": ("tesla", "elon musk", "model 3", "model y", "cybertruck"),
-    "GOOGL": ("alphabet", "google", "youtube", "waymo", "gemini"),
-    "GOOG": ("alphabet", "google", "youtube", "waymo", "gemini"),
-    "AVGO": ("broadcom", "avgo", "vmware"), "AMD": ("amd", "advanced micro devices", "radeon"),
-    "PLTR": ("palantir", "foundry", "aip"), "COIN": ("coinbase", "coin"),
-    "INTC": ("intel", "intel foundry"), "JPM": ("jpmorgan", "jp morgan", "jamie dimon"),
-    "NFLX": ("netflix"), "ORCL": ("oracle", "oci"), "CRM": ("salesforce", "slack"),
-    "MU": ("micron", "dram", "nand"), "QCOM": ("qualcomm", "snapdragon"), "BA": ("boeing", "737", "787"),
-    "WMT": ("walmart",), "XOM": ("exxon", "exxonmobil", "exxon mobil"), "CVX": ("chevron",),
-    "SPY": ("s&p 500", "sp500", "sp 500"), "QQQ": ("nasdaq 100", "nasdaq-100", "qqq"),
-    "IWM": ("russell 2000", "iwm"), "BTCUSD": ("bitcoin", "btc"),
-    "ETHUSD": ("ethereum", "ether", "eth"), "XAUUSD": ("gold", "xau", "bullion"),
-    "EURUSD": ("eur/usd", "euro", "eurusd"), "GBPUSD": ("gbp/usd", "pound", "sterling", "gbpusd"),
-    "USDJPY": ("usd/jpy", "yen", "usdjpy"),
+    "AAPL": ("apple", "aapl", "apple shares", "apple stock", "iphone", "ipad", "mac", "tim cook", "app store"),
+    "MSFT": ("microsoft", "msft", "microsoft stock", "microsoft shares", "azure", "copilot"),
+    "NVDA": ("nvidia", "nvda", "nvidia stock", "nvidia shares", "gpu", "jensen huang"),
+    "AMZN": ("amazon", "amzn", "amazon stock", "amazon shares", "aws", "prime"),
+    "META": ("meta", "meta stock", "meta shares", "facebook", "instagram", "whatsapp", "zuckerberg"),
+    "TSLA": ("tesla", "tsla", "tesla stock", "tesla shares", "elon musk", "model 3", "model y", "cybertruck"),
+    "GOOGL": ("alphabet", "google", "googl", "goog", "alphabet stock", "google stock", "youtube", "waymo", "gemini"),
+    "GOOG": ("alphabet", "google", "googl", "goog", "alphabet stock", "google stock", "youtube", "waymo", "gemini"),
+    "AVGO": ("broadcom", "avgo", "broadcom stock", "broadcom shares", "vmware"),
+    "AMD": ("amd", "advanced micro devices", "amd stock", "amd shares", "radeon"),
+    "PLTR": ("palantir", "pltr", "palantir stock", "palantir shares", "foundry", "aip"),
+    "COIN": ("coinbase", "coin", "coinbase stock", "coinbase shares"),
+    "INTC": ("intel", "intc", "intel stock", "intel shares", "intel foundry"),
+    "JPM": ("jpmorgan", "jp morgan", "jpm", "jpmorgan stock", "jamie dimon"),
+    "NFLX": ("netflix", "nflx", "netflix stock", "netflix shares"),
+    "ORCL": ("oracle", "orcl", "oracle stock", "oracle shares", "oci"),
+    "CRM": ("salesforce", "crm", "salesforce stock", "salesforce shares", "slack"),
+    "MU": ("micron", "mu", "micron stock", "micron shares", "dram", "nand"),
+    "QCOM": ("qualcomm", "qcom", "qualcomm stock", "qualcomm shares", "snapdragon"),
+    "BA": ("boeing", "ba", "boeing stock", "boeing shares", "737", "787"),
+    "WMT": ("walmart", "wmt", "walmart stock", "walmart shares"),
+    "XOM": ("exxon", "exxonmobil", "exxon mobil", "xom", "exxon stock"),
+    "CVX": ("chevron", "cvx", "chevron stock", "chevron shares"),
+    "SPY": ("s&p 500", "sp500", "sp 500", "spy", "s&p 500 etf"),
+    "QQQ": ("nasdaq 100", "nasdaq-100", "qqq", "nasdaq 100 etf"),
+    "IWM": ("russell 2000", "iwm", "russell 2000 etf"),
+    "BTCUSD": ("bitcoin", "btc", "bitcoin price", "bitcoin market"),
+    "ETHUSD": ("ethereum", "eth", "ethereum price", "ethereum market"),
+    "XAUUSD": ("gold", "xau", "gold price", "bullion"),
+    "EURUSD": ("eur/usd", "eurusd", "euro", "euro dollar"),
+    "GBPUSD": ("gbp/usd", "gbpusd", "pound", "sterling"),
+    "USDJPY": ("usd/jpy", "usdjpy", "yen"),
 }
 
 _MARKET_TERMS = (
@@ -79,7 +92,7 @@ _BROAD_ROUNDUP_TERMS = (
 _IRRELEVANT_TERMS = (
     "mcp server", "mcp servers", "streaming", "tv shows", "movies", "movie", "recipe", "fashion", "celebrity", "wedding",
     "travel guide", "best restaurants", "game review", "gaming guide", "gift guide", "what to watch", "netflix shows",
-    "tokenized", "tokenised", "tokenized stock", "tokenised stock", "synthetic stock", "wrapped token",
+    "tokenized", "tokenised", "tokenized stock", "tokenised stock", "synthetic stock", "wrapped token", "tokenized aapl",
 )
 
 _CRYPTO_ONLY_DOMAINS = {"coindesk.com", "cointelegraph.com", "theblock.co", "blockworks.co", "decrypt.co"}
@@ -133,10 +146,7 @@ NEWS_SOURCES: tuple[NewsSource, ...] = (
 
 def _search_terms(symbol: str) -> list[str]:
     symbol = symbol.strip().upper()
-    alias = _COMPANY_ALIASES.get(symbol)
-    if not alias:
-        return [symbol]
-    return [symbol, alias]
+    return [symbol, _COMPANY_ALIASES.get(symbol, symbol)]
 
 
 def _asset_route(symbol: str) -> str:
@@ -243,8 +253,6 @@ def _search_query(symbol: str, source: NewsSource) -> str:
     route = _asset_route(symbol)
 
     if route == "equity":
-        # Do not search the bare company name. That is what caused consumer,
-        # entertainment and unrelated stories such as Apple TV/MCP content to leak in.
         phrases = [
             f'"{symbol}"',
             f'"{alias} shares"',
@@ -269,6 +277,31 @@ def _search_query(symbol: str, source: NewsSource) -> str:
     return f"({query}) site:{source.domain} when:1d"
 
 
+def _entity_hits(title: str, symbol: str) -> tuple[int, bool, bool]:
+    normalized = _normalise_title(title)
+    lower = normalized.lower()
+    alias = _COMPANY_ALIASES.get(symbol, symbol).lower()
+    ticker_hit = bool(re.search(rf"\b{re.escape(symbol.lower())}\b", normalized))
+    alias_hit = bool(alias and re.search(rf"\b{re.escape(alias)}\b", normalized))
+    keywords = _COMPANY_KEYWORDS.get(symbol, (symbol.lower(),))
+    keyword_hits = sum(1 for term in keywords if term.lower() in lower)
+    return keyword_hits, ticker_hit, alias_hit
+
+
+def _other_company_mentions(title: str, symbol: str) -> int:
+    normalized = _normalise_title(title)
+    count = 0
+    for other_symbol, alias in _COMPANY_ALIASES.items():
+        if other_symbol == symbol:
+            continue
+        patterns = [other_symbol.lower()]
+        if alias:
+            patterns.append(alias.lower())
+        if any(re.search(rf"\b{re.escape(pattern)}\b", normalized) for pattern in patterns):
+            count += 1
+    return count
+
+
 def _title_relevance(item: NewsItemDTO, symbol: str, terms: list[str]) -> tuple[bool, float]:
     title = _normalise_title(item.title)
     if any(bad in title for bad in _IRRELEVANT_TERMS):
@@ -277,11 +310,7 @@ def _title_relevance(item: NewsItemDTO, symbol: str, terms: list[str]) -> tuple[
         return False, -1000.0
 
     route = _asset_route(symbol)
-    alias = _COMPANY_ALIASES.get(symbol, symbol).lower()
-    ticker_hit = bool(re.search(rf"\b{re.escape(symbol.lower())}\b", title))
-    alias_hit = alias in title
-    keyword_hits = sum(1 for term in _COMPANY_KEYWORDS.get(symbol, ()) if term.lower() in title)
-
+    keyword_hits, ticker_hit, alias_hit = _entity_hits(item.title, symbol)
     if not ticker_hit and not alias_hit and keyword_hits == 0:
         return False, -1000.0
 
@@ -289,65 +318,91 @@ def _title_relevance(item: NewsItemDTO, symbol: str, terms: list[str]) -> tuple[
     business_hits = sum(1 for term in _BUSINESS_IMPACT_PHRASES if term in title)
     listicle_hits = sum(1 for term in _LISTICLE_TERMS if term in title)
     broad_hits = sum(1 for term in _BROAD_ROUNDUP_TERMS if term in title)
+    other_companies = _other_company_mentions(item.title, symbol)
 
     if route == "equity":
-        # For a single equity, the company must be the actual subject of the story.
-        # A ticker is the strongest entity signal. Bare company-name mentions in a
-        # roundup/listicle are not enough.
+        alias = _COMPANY_ALIASES.get(symbol, symbol).lower()
         company_context = any(
             phrase in title
             for phrase in (
                 f"{alias} shares", f"{alias} stock", f"{alias} earnings", f"{alias} revenue",
                 f"{alias} guidance", f"{alias} analyst", f"{alias} investors", f"{alias} price",
                 f"{alias} valuation", f"{alias} demand", f"{alias} sales", f"{alias} profit",
+                f"{alias} launches", f"{alias} launch", f"{alias} product",
             )
         )
 
-        # Explicit listicles/"five stocks" roundups are poor single-ticker news.
+        # Multi-stock listicles and generic market roundups should not masquerade as
+        # single-ticker news. This specifically blocks headlines such as
+        # "GameStop, Oracle, Apple and More" and "Dow Jones Futures ... Apple ...".
+        if other_companies >= 2 and not ticker_hit:
+            return False, -1000.0
         if listicle_hits and not ticker_hit:
             return False, -1000.0
-
-        # Generic market headlines that only mention the company in passing should
-        # not enter the primary result set unless the ticker itself is explicit.
         if broad_hits and not ticker_hit and not company_context:
             return False, -1000.0
 
-        if not ticker_hit and not company_context:
-            # Business-impact pieces (e.g. product/demand/manufacturing) can still
-            # matter for the stock, but they rank below direct market stories.
-            if business_hits == 0:
-                return False, -1000.0
+        # A bare company mention is insufficient. It must have either an explicit
+        # financial phrase, a business-impact phrase, or a ticker symbol.
+        if not ticker_hit and not company_context and direct_hits == 0 and business_hits == 0:
+            return False, -1000.0
 
+        # If the title is clearly about several companies, keep it only as lower-value
+        # market context when the requested ticker is explicitly identified.
         score = 55.0
         if ticker_hit:
-            score += 45.0
+            score += 60.0
         if company_context:
-            score += 35.0
-        score += min(keyword_hits, 3) * 8.0
-        score += min(direct_hits, 5) * 18.0
-        score += min(business_hits, 3) * 6.0
+            score += 40.0
+        if alias_hit:
+            score += 10.0
+        score += min(keyword_hits, 4) * 7.0
+        score += min(direct_hits, 5) * 17.0
+        score += min(business_hits, 3) * 5.0
 
+        if other_companies:
+            score -= min(other_companies, 3) * 25.0
         if listicle_hits:
-            score -= 60.0 * listicle_hits
+            score -= 80.0 * listicle_hits
         if broad_hits:
-            score -= 28.0 * broad_hits
+            score -= 35.0 * broad_hits
+
+        # Product/consumer stories are acceptable only when there is a clear market
+        # consequence (for example an analyst view or share-price implication).
+        consumer_terms = ("iphone", "ipad", "mac", "app store", "watch", "airpods")
+        consumer_hits = sum(1 for term in consumer_terms if term in title)
+        strong_market_hits = sum(1 for term in _DIRECT_MARKET_PHRASES if term in title)
+        if consumer_hits and strong_market_hits == 0 and not ticker_hit:
+            return False, -1000.0
+        if consumer_hits:
+            score -= max(0.0, consumer_hits - 1.0) * 10.0
+
+        # Generic "latest stock news" pages are useful but should rank below actual
+        # event/analysis headlines when better material exists.
         if title.startswith("latest ") and "stock news" in title:
-            score -= 10.0
+            score -= 12.0
         return True, score
 
-    # Macro/asset-specific routes can use broader headlines because the asset is
-    # itself the market concept (gold, forex, bitcoin, etc.).
+    # Macro/asset-specific routes can use broader headlines because the asset itself
+    # is the market concept (gold, forex, bitcoin, etc.).
     market_hits = sum(1 for term in _MARKET_TERMS if term in title)
-    score = 65.0 + (35.0 if ticker_hit else 0.0) + (20.0 if alias_hit else 0.0)
+    score = 65.0 + (40.0 if ticker_hit else 0.0) + (20.0 if alias_hit else 0.0)
     score += min(market_hits, 5) * 8.0
     if listicle_hits:
-        score -= 25.0 * listicle_hits
+        score -= 30.0 * listicle_hits
     return True, score
 
 
 class GDELTNewsProvider:
     async def search(self, query: str, limit: int = 20, timespan: str = "48h") -> list[NewsItemDTO]:
-        params = {"query": query, "mode": "artlist", "format": "json", "maxrecords": min(limit, 75), "timespan": timespan, "sort": "datedesc"}
+        params = {
+            "query": query,
+            "mode": "artlist",
+            "format": "json",
+            "maxrecords": min(limit, 75),
+            "timespan": timespan,
+            "sort": "datedesc",
+        }
         async with httpx.AsyncClient(timeout=15) as client:
             response = await client.get(settings.gdelt_base_url, params=params)
             response.raise_for_status()
