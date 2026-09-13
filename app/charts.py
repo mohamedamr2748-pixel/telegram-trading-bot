@@ -77,6 +77,30 @@ def _display_index(index: pd.DatetimeIndex, symbol: str) -> pd.DatetimeIndex:
         return index
 
 
+def _infer_previous_close(series: pd.Series, timeframe: str) -> float | None:
+    """Infer the previous session close when the caller did not provide it."""
+    if len(series) < 2:
+        return None
+
+    upper = timeframe.upper()
+    if upper.startswith("1D"):
+        # A one-day intraday request usually contains only today's session.
+        # Do not incorrectly label the penultimate intraday point as prev close.
+        return None
+
+    if upper.startswith("5D"):
+        dates = pd.Series(series.index.date, index=series.index)
+        unique_dates = list(dict.fromkeys(dates.tolist()))
+        if len(unique_dates) >= 2:
+            previous_day = unique_dates[-2]
+            previous = series[dates == previous_day]
+            if not previous.empty:
+                return float(previous.iloc[-1])
+        return None
+
+    return float(series.iloc[-2])
+
+
 async def render_google_finance_chart(
     df: pd.DataFrame,
     symbol: str,
@@ -86,7 +110,7 @@ async def render_google_finance_chart(
     currency: str | None = None,
     change_percent: float | None = None,
 ) -> io.BytesIO:
-    """Render a Google Finance-style price chart from our normalized market data."""
+    """Render a compact Google Finance-style price chart from market data."""
     if "Close" not in df.columns:
         raise ValueError("Chart requires a Close/price series")
 
@@ -104,6 +128,10 @@ async def render_google_finance_chart(
     display_index = _display_index(work.index, symbol)
     series = pd.Series(work["Close"].to_numpy(dtype=float), index=display_index)
     last_price = price if price is not None else float(series.iloc[-1])
+    previous = prev_close if prev_close is not None else _infer_previous_close(series, timeframe)
+    if change_percent is None and previous and previous > 0:
+        change_percent = (last_price / previous - 1.0) * 100.0
+
     currency_text = f" {currency}" if currency else ""
 
     fig, ax = plt.subplots(figsize=(12.8, 7.1), dpi=160, facecolor="#0b1220")
@@ -111,26 +139,26 @@ async def render_google_finance_chart(
 
     x = series.index.to_pydatetime()
     y = series.to_numpy(dtype=float)
-    baseline = float(min(y.min(), prev_close if prev_close and prev_close > 0 else y.min()))
-    spread = float(max(y.max(), prev_close if prev_close and prev_close > 0 else y.max()) - baseline)
+    baseline = float(min(y.min(), previous if previous and previous > 0 else y.min()))
+    ceiling = float(max(y.max(), previous if previous and previous > 0 else y.max()))
+    spread = ceiling - baseline
     padding = max(spread * 0.22, abs(last_price) * 0.0025, 0.01)
     chart_bottom = baseline - padding
-    chart_top = float(max(y.max(), prev_close if prev_close and prev_close > 0 else y.max()) + padding)
+    chart_top = ceiling + padding
 
     positive = change_percent is None or change_percent >= 0
     line_color = "#81c995" if positive else "#f28b82"
-    fill_color = line_color
     muted = "#b8bdc7"
 
     ax.plot(x, y, linewidth=2.4, color=line_color, solid_capstyle="round", zorder=4)
-    ax.fill_between(x, y, chart_bottom, color=fill_color, alpha=0.10, zorder=1)
+    ax.fill_between(x, y, chart_bottom, color=line_color, alpha=0.10, zorder=1)
 
-    if prev_close is not None and prev_close > 0:
-        ax.axhline(prev_close, linewidth=1.0, linestyle=(0, (1.5, 4)), color="#c3c7cf", alpha=0.7, zorder=2)
+    if previous is not None and previous > 0:
+        ax.axhline(previous, linewidth=1.0, linestyle=(0, (1.5, 4)), color="#c3c7cf", alpha=0.7, zorder=2)
         ax.text(
             1.005,
-            prev_close,
-            f"Prev\nclose\n{prev_close:.6g}",
+            previous,
+            f"Prev\nclose\n{previous:.6g}",
             transform=ax.get_yaxis_transform(),
             ha="left",
             va="center",
@@ -215,7 +243,7 @@ async def render_chart(
         )
 
     work = _clean_ohlcv(df)
-    enriched = add_advanced_indicators(work) if advanced else add_basic_indicators(work)
+    enriched = add_advanced_indicators(work)
 
     has_volume = "Volume" in enriched.columns
     volume_panel = 1 if has_volume else None
@@ -227,7 +255,6 @@ async def render_chart(
         plots.append(_line(enriched["EMA20"], 0, "#38bdf8", 1.15))
     if "EMA50" in enriched:
         plots.append(_line(enriched["EMA50"], 0, "#f59e0b", 1.15))
-
     if "BB_UPPER" in enriched:
         plots.append(_line(enriched["BB_UPPER"], 0, "#a78bfa", 0.9))
     if "BB_MID" in enriched:
@@ -260,8 +287,7 @@ async def render_chart(
     ratios = [6]
     if has_volume:
         ratios.append(1.8)
-    ratios.append(2)
-    ratios.append(2)
+    ratios.extend([2, 2])
 
     buf = io.BytesIO()
     fig, _ = mpf.plot(
