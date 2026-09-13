@@ -69,7 +69,7 @@ class GoogleFinanceProvider(MarketProvider):
     @staticmethod
     def _find_identifier(value: object) -> str | None:
         if isinstance(value, dict):
-            for key in ("identifier", "quote", "symbol"):
+            for key in ("identifier", "quote"):
                 candidate = value.get(key)
                 if isinstance(candidate, str) and ":" in candidate:
                     return candidate.upper()
@@ -115,7 +115,8 @@ class GoogleFinanceProvider(MarketProvider):
         return None
 
     async def get_quote(self, symbol: str) -> MarketQuote:
-        identifier = await self.resolve_symbol(symbol)
+        user_symbol = symbol.strip().upper()
+        identifier = await self.resolve_symbol(user_symbol)
         data = await self._request(f"quote/{quote(identifier, safe=':,-.')}")
 
         instrument = data.get("instrument") if isinstance(data.get("instrument"), dict) else data
@@ -155,7 +156,7 @@ class GoogleFinanceProvider(MarketProvider):
                 pass
 
         return MarketQuote(
-            symbol=identifier,
+            symbol=user_symbol,
             asset_class=str(instrument.get("type") or "market").lower(),
             price=price,
             open=self._first_numeric(instrument, ("open",), ("priceopen",)),
