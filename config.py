@@ -11,6 +11,9 @@ class Settings(BaseSettings):
     scanner_universe: str = "AAPL,MSFT,NVDA,AMZN,META,TSLA,GOOGL,GOOG,AVGO,AMD,PLTR,COIN,INTC,JPM,SPY,QQQ,IWM"
     yfinance_enabled: bool = True
     biquote_enabled: bool = True
+    google_finance_enabled: bool = False
+    google_finance_base_url: str = "https://api.crawlora.net/api/v1/google/finance"
+    google_finance_api_key: str = ""
     market_poll_seconds: int = 30
     alert_poll_seconds: int = 15
     news_poll_seconds: int = 120
