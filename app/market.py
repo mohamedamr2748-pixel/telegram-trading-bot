@@ -129,13 +129,9 @@ class GoogleFinanceProvider(MarketProvider):
         if price is None or price <= 0:
             raise ValueError(f"Google Finance returned no valid price for {identifier}")
 
-        previous = self._first_numeric(
-            instrument,
-            ("previous_close",),
-            ("key_stats", "previous_close"),
-        )
+        previous = self._first_numeric(instrument, ("previous_close",), ("key_stats", "previous_close"), ("previousClose",))
         change = self._first_numeric(instrument, ("change",))
-        change_pct = self._first_numeric(instrument, ("change_percent",))
+        change_pct = self._first_numeric(instrument, ("change_percent",), ("changePercent",))
         if change is None and previous:
             change = price - previous
         if change_pct is None and previous:
@@ -167,7 +163,16 @@ class GoogleFinanceProvider(MarketProvider):
             change_percent=change_pct,
             timestamp=timestamp,
             source=self.name,
-            market_status=str(instrument.get("market_state") or instrument.get("market_status") or "unknown"),
+            market_status=str(instrument.get("market_state") or instrument.get("market_status") or instrument.get("marketState") or "unknown"),
+            previous_close=previous,
+            year_high=self._first_numeric(instrument, ("year_high",), ("52_week_high",), ("fifty_two_week_high",), ("key_stats", "52_week_high")),
+            year_low=self._first_numeric(instrument, ("year_low",), ("52_week_low",), ("fifty_two_week_low",), ("key_stats", "52_week_low")),
+            market_cap=self._first_numeric(instrument, ("market_cap",), ("marketCap",), ("valuation", "market_cap")),
+            pe_ratio=self._first_numeric(instrument, ("pe_ratio",), ("pe",), ("key_stats", "pe_ratio")),
+            dividend_yield=self._first_numeric(instrument, ("dividend_yield",), ("dividendYield",), ("key_stats", "dividend_yield")),
+            eps=self._first_numeric(instrument, ("eps",), ("earnings_per_share",), ("key_stats", "eps")),
+            pre_market_price=self._first_numeric(instrument, ("pre_market_price",), ("preMarketPrice",), ("premarket_price",)),
+            post_market_price=self._first_numeric(instrument, ("after_hours_price",), ("post_market_price",), ("postMarketPrice",)),
         )
 
     async def get_history(self, symbol: str, period: str = "1mo", interval: str = "1d") -> pd.DataFrame:
@@ -175,10 +180,7 @@ class GoogleFinanceProvider(MarketProvider):
         window = self._WINDOWS.get(period.lower())
         if window is None:
             raise ValueError(f"Unsupported Google Finance chart window: {period}")
-        data = await self._request(
-            f"chart/{quote(identifier, safe=':,-.')}",
-            {"window": window},
-        )
+        data = await self._request(f"chart/{quote(identifier, safe=':,-.')}", {"window": window})
 
         candidates: list[object] = []
         for key in ("tickers", "points", "chart", "series", "data"):
@@ -211,21 +213,12 @@ class GoogleFinanceProvider(MarketProvider):
             except (TypeError, ValueError):
                 continue
             volume = to_float(point.get("volume"), 0.0)
-            rows.append({
-                "Date": timestamp,
-                "Open": price,
-                "High": price,
-                "Low": price,
-                "Close": price,
-                "Volume": volume,
-            })
+            rows.append({"Date": timestamp, "Open": price, "High": price, "Low": price, "Close": price, "Volume": volume})
 
         if not rows:
             raise ValueError(f"No chart data returned for {identifier}")
-
         frame = pd.DataFrame(rows).set_index("Date").sort_index()
-        frame = frame[~frame.index.duplicated(keep="last")]
-        return frame
+        return frame[~frame.index.duplicated(keep="last")]
 
 
 class YFinanceProvider(MarketProvider):
@@ -255,8 +248,19 @@ class YFinanceProvider(MarketProvider):
                 info = ticker.fast_info
                 price = to_float(getattr(info, "last_price", None))
                 previous = to_float(getattr(info, "previous_close", None))
+                open_ = to_float(getattr(info, "open", None)) or None
+                high = to_float(getattr(info, "day_high", None)) or None
+                low = to_float(getattr(info, "day_low", None)) or None
+                volume = to_float(getattr(info, "last_volume", None), 0.0)
+                year_high = to_float(getattr(info, "year_high", None)) or None
+                year_low = to_float(getattr(info, "year_low", None)) or None
+                market_cap = to_float(getattr(info, "market_cap", None)) or None
+                post_market = to_float(getattr(info, "post_market_price", None)) or None
+                pre_market = to_float(getattr(info, "pre_market_price", None)) or None
             except Exception:
                 price = previous = 0.0
+                open_ = high = low = volume = 0.0
+                year_high = year_low = market_cap = post_market = pre_market = None
             if price <= 0:
                 frame = ticker.history(period="2d", interval="1d", auto_adjust=False)
                 if frame.empty:
@@ -272,23 +276,35 @@ class YFinanceProvider(MarketProvider):
                 if ts.tzinfo is None:
                     ts = ts.replace(tzinfo=timezone.utc)
             else:
-                open_ = high = low = volume = 0.0
                 ts = datetime.now(timezone.utc)
+
+            pe_ratio = dividend_yield = eps = None
+            try:
+                info_dict = ticker.info
+                year_high = year_high or to_float(info_dict.get("fiftyTwoWeekHigh"), 0.0) or None
+                year_low = year_low or to_float(info_dict.get("fiftyTwoWeekLow"), 0.0) or None
+                market_cap = market_cap or to_float(info_dict.get("marketCap"), 0.0) or None
+                pe_ratio = to_float(info_dict.get("trailingPE"), 0.0) or None
+                dividend_yield = to_float(info_dict.get("dividendYield"), 0.0) or None
+                eps = to_float(info_dict.get("trailingEps"), 0.0) or None
+                pre_market = pre_market or to_float(info_dict.get("preMarketPrice"), 0.0) or None
+                post_market = post_market or to_float(info_dict.get("postMarketPrice"), 0.0) or None
+                market_state = str(info_dict.get("marketState") or "unknown").lower()
+            except Exception:
+                market_state = "open" if ts.date() == datetime.now(timezone.utc).date() else "unknown"
+
             change = price - previous if previous else None
             change_pct = (change / previous * 100) if previous else None
             return MarketQuote(
                 symbol=symbol.upper(),
                 asset_class=self._classify(symbol),
                 price=price,
-                open=open_,
-                high=high,
-                low=low,
-                volume=volume,
-                change=change,
-                change_percent=change_pct,
-                timestamp=ts,
-                source=self.name,
-                market_status="open" if ts.date() == datetime.now(timezone.utc).date() else "unknown",
+                open=open_, high=high, low=low, volume=volume,
+                change=change, change_percent=change_pct,
+                timestamp=ts, source=self.name, market_status=market_state,
+                previous_close=previous or None, year_high=year_high, year_low=year_low,
+                market_cap=market_cap, pe_ratio=pe_ratio, dividend_yield=dividend_yield,
+                eps=eps, pre_market_price=pre_market, post_market_price=post_market,
             )
 
         return await asyncio.to_thread(fetch)
@@ -299,7 +315,6 @@ class YFinanceProvider(MarketProvider):
             if df.empty:
                 raise ValueError(f"No historical data found for {symbol}")
             return df
-
         return await asyncio.to_thread(fetch)
 
 
@@ -309,10 +324,7 @@ class BiQuoteProvider(MarketProvider):
 
     async def get_quote(self, symbol: str) -> MarketQuote:
         async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.get(
-                f"{self.base_url}/{symbol.upper()}",
-                params={"allowStale": "true"},
-            )
+            response = await client.get(f"{self.base_url}/{symbol.upper()}", params={"allowStale": "true"})
             response.raise_for_status()
             data = response.json()
 
@@ -331,18 +343,16 @@ class BiQuoteProvider(MarketProvider):
         change = (price - previous) if previous else None
         change_pct = (change / previous * 100) if previous else None
         return MarketQuote(
-            symbol=symbol.upper(),
-            asset_class=str(data.get("type") or "market").lower(),
-            price=price,
-            open=to_float(data.get("open"), 0.0) or None,
-            high=to_float(data.get("high"), 0.0) or None,
-            low=to_float(data.get("low"), 0.0) or None,
-            volume=to_float(data.get("volume")),
-            change=change,
-            change_percent=change_pct,
-            timestamp=timestamp,
-            source=self.name,
-            market_status=str(data.get("marketState") or "unknown"),
+            symbol=symbol.upper(), asset_class=str(data.get("type") or "market").lower(), price=price,
+            open=to_float(data.get("open"), 0.0) or None, high=to_float(data.get("high"), 0.0) or None,
+            low=to_float(data.get("low"), 0.0) or None, volume=to_float(data.get("volume")),
+            change=change, change_percent=change_pct, timestamp=timestamp, source=self.name,
+            market_status=str(data.get("marketState") or "unknown"), previous_close=previous or None,
+            year_high=to_float(data.get("yearHigh"), 0.0) or None, year_low=to_float(data.get("yearLow"), 0.0) or None,
+            market_cap=to_float(data.get("marketCap"), 0.0) or None, pe_ratio=to_float(data.get("peRatio"), 0.0) or None,
+            dividend_yield=to_float(data.get("dividendYield"), 0.0) or None, eps=to_float(data.get("eps"), 0.0) or None,
+            pre_market_price=to_float(data.get("preMarketPrice"), 0.0) or None,
+            post_market_price=to_float(data.get("postMarketPrice"), 0.0) or None,
         )
 
     async def get_history(self, symbol: str, period: str = "1mo", interval: str = "1d") -> pd.DataFrame:
