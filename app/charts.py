@@ -8,6 +8,7 @@ import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import mplfinance as mpf
 import pandas as pd
+from matplotlib.patches import FancyBboxPatch
 
 from app.domain import MarketQuote
 from app.indicators import add_advanced_indicators
@@ -163,10 +164,10 @@ async def _correct_yfinance_previous_close(symbol: str, quote: MarketQuote | Non
     return quote.previous_close
 
 
-def _period_button_label(selected: str, value: str) -> tuple[str, str]:
-    if selected.upper().startswith(value.upper()):
-        return (f"● {value}", "#f8fafc")
-    return (value, "#c7ccd4")
+def _selector_key(timeframe: str) -> str | None:
+    upper = timeframe.upper().replace("MO", "M")
+    mapping = [("1D", "1D"), ("5D", "5D"), ("1M", "1M"), ("6M", "6M"), ("YTD", "YTD"), ("1Y", "1Y"), ("5Y", "5Y")]
+    return next((label for prefix, label in mapping if upper.startswith(prefix)), None)
 
 
 async def render_google_finance_chart(df: pd.DataFrame, symbol: str, timeframe: str, prev_close: float | None = None, price: float | None = None, currency: str | None = None, change_percent: float | None = None, quote: MarketQuote | None = None) -> io.BytesIO:
@@ -208,7 +209,7 @@ async def render_google_finance_chart(df: pd.DataFrame, symbol: str, timeframe: 
     currency_text = f" {currency}" if currency else ""
 
     fig = plt.figure(figsize=_STANDARD_FIGSIZE, dpi=_STANDARD_DPI, facecolor="#202124")
-    ax = fig.add_axes([0.035, 0.31, 0.865, 0.54])
+    ax = fig.add_axes([0.035, 0.30, 0.865, 0.56])
     ax.set_facecolor("#202124")
     x = series.index.to_pydatetime()
     y = series.to_numpy(dtype=float)
@@ -217,14 +218,12 @@ async def render_google_finance_chart(df: pd.DataFrame, symbol: str, timeframe: 
     spread = ceiling - baseline
     padding = max(spread * 0.22, abs(last_price) * 0.0025, 0.01)
     chart_bottom, chart_top = baseline - padding, ceiling + padding
-
     if change_percent is None or abs(change_percent) < 1e-12:
         line_color = "#9aa0a6"
     elif change_percent > 0:
         line_color = "#55e982"
     else:
         line_color = "#f26b63"
-
     ax.plot(x, y, linewidth=2.55, color=line_color, solid_capstyle="round", solid_joinstyle="round", antialiased=True, zorder=4)
     ax.fill_between(x, y, chart_bottom, color=line_color, alpha=0.11, zorder=1, antialiased=True)
     if previous is not None:
@@ -248,35 +247,41 @@ async def render_google_finance_chart(df: pd.DataFrame, symbol: str, timeframe: 
         price_line += f"  {change_percent:+.2f}%"
     ax.text(0.0, 1.19, symbol.upper(), transform=ax.transAxes, ha="left", va="bottom", fontsize=20, fontweight="bold", color="#f8fafc")
     ax.text(0.0, 1.065, price_line, transform=ax.transAxes, ha="left", va="bottom", fontsize=18, fontweight="bold", color=line_color if change_percent is not None else "#f8fafc")
-    ax.text(1.01, 1.19, "7 Sep 2026", transform=ax.transAxes, ha="right", va="bottom", fontsize=8.5, color="#b9bec7")
 
-    # Static visual timeframe selector, matching the reference chart style.
+    # Reference-style timeframe selector.
     selector = ["1D", "5D", "1M", "6M", "YTD", "1Y", "5Y"]
+    selected = _selector_key(timeframe)
     start_x = 0.67
     step = 0.047
     for idx, item in enumerate(selector):
-        label, color = _period_button_label(timeframe, item)
         xpos = start_x + idx * step
-        ax.text(xpos, 1.19, label, transform=ax.transAxes, ha="center", va="bottom", fontsize=10.5, fontweight="bold" if label.startswith("●") else "normal", color=color)
-    if any(timeframe.upper().startswith(v) for v in ["1D", "5D", "1M", "3M", "6M", "YTD", "1Y", "5Y"]):
-        selected = next((v for v in selector if timeframe.upper().startswith(v)), None)
-        if selected:
-            idx = selector.index(selected)
-            xpos = start_x + idx * step
-            ax.text(xpos, 1.255, "▰", transform=ax.transAxes, ha="center", va="bottom", fontsize=15, color="#7aa7ff")
+        if item == selected:
+            pill = FancyBboxPatch(
+                (xpos - 0.020, 1.145), 0.040, 0.085,
+                boxstyle="round,pad=0.008,rounding_size=0.018",
+                transform=ax.transAxes,
+                linewidth=0,
+                facecolor="#30343a",
+                edgecolor="none",
+                zorder=8,
+            )
+            ax.add_patch(pill)
+            ax.text(xpos, 1.19, item, transform=ax.transAxes, ha="center", va="center", fontsize=10.5, fontweight="bold", color="#f8fafc", zorder=9)
+        else:
+            ax.text(xpos, 1.19, item, transform=ax.transAxes, ha="center", va="center", fontsize=10.5, color="#c7ccd4", zorder=8)
 
-    ax.text(1.0, -0.105, timeframe.upper(), transform=ax.transAxes, ha="right", va="top", color="#b8bdc7", fontsize=8.5, fontweight="bold")
+    chart_date = pd.Timestamp(x[-1]).strftime("%Y-%b-%d")
+    ax.text(1.0, 1.19, chart_date, transform=ax.transAxes, ha="right", va="center", fontsize=8.5, color="#b9bec7")
+    ax.text(1.0, -0.10, timeframe.upper(), transform=ax.transAxes, ha="right", va="top", color="#b8bdc7", fontsize=8.5, fontweight="bold")
 
-    fig.text(0.035, 0.255, "", color="#ffffff")
-    fig.text(0.035, 0.285, "", color="#ffffff")
-    fig.add_artist(plt.Line2D([0.035, 0.93], [0.275, 0.275], transform=fig.transFigure, color="#34373b", linewidth=0.9))
+    fig.add_artist(plt.Line2D([0.035, 0.93], [0.262, 0.262], transform=fig.transFigure, color="#34373b", linewidth=0.9))
 
     rows = [
         [("Open", stats["Open"]), ("Mkt cap", _fmt_value(quote.market_cap) if quote else "n/a"), ("Dividend", _fmt_meta(quote.dividend_yield, percent=True) if quote else "n/a")],
         [("High", stats["High"]), ("P/E ratio", _fmt_meta(quote.pe_ratio) if quote else "n/a"), ("After hours", _after_hours(quote))],
         [("Low", stats["Low"]), ("52-wk high", _fmt_value(quote.year_high) if quote else "n/a"), ("52-wk low", _fmt_value(quote.year_low) if quote else "n/a")],
     ]
-    y_positions = [0.225, 0.183, 0.141]
+    y_positions = [0.222, 0.180, 0.138]
     x_positions = [0.048, 0.37, 0.685]
     value_offsets = [0.105, 0.105, 0.105]
     for ypos, row in zip(y_positions, rows):
