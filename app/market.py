@@ -218,15 +218,51 @@ class YFinanceProvider(MarketProvider):
         "USDCHF": "USDCHF=X",
         "NZDUSD": "NZDUSD=X",
     }
+    _INVERSE_FOREX = {
+        "USDEUR": "EURUSD",
+        "USDGBP": "GBPUSD",
+        "JPYUSD": "USDJPY",
+        "AUUSD": "AUDUSD",
+        "CADUSD": "USDCAD",
+        "CHFUSD": "USDCHF",
+        "NZDUSD": None,
+    }
+
+    @classmethod
+    def _normalize_pair(cls, symbol: str) -> tuple[str, bool]:
+        normalized = symbol.strip().upper().replace("/", "").replace("-", "")
+        if normalized in cls._FOREX_YF_SYMBOLS:
+            return normalized, False
+        inverse_base = cls._INVERSE_FOREX.get(normalized)
+        if inverse_base:
+            return inverse_base, True
+        return symbol.strip().upper(), False
 
     @classmethod
     def _history_symbol(cls, symbol: str) -> str:
-        normalized = symbol.strip().upper()
+        normalized, _ = cls._normalize_pair(symbol)
         return cls._FOREX_YF_SYMBOLS.get(normalized, normalized)
 
     @staticmethod
+    def _invert_quote(value: float | None) -> float | None:
+        return (1.0 / value) if value and value > 0 else None
+
+    @classmethod
+    def _invert_history(cls, frame: pd.DataFrame) -> pd.DataFrame:
+        inverted = frame.copy()
+        if "Open" in inverted:
+            inverted["Open"] = inverted["Open"].apply(cls._invert_quote)
+        if "High" in inverted:
+            inverted["High"] = inverted["Low"].apply(cls._invert_quote)
+        if "Low" in inverted:
+            inverted["Low"] = inverted["High"].apply(cls._invert_quote)
+        if "Close" in inverted:
+            inverted["Close"] = inverted["Close"].apply(cls._invert_quote)
+        return inverted
+
+    @staticmethod
     def _classify(symbol: str) -> str:
-        s = symbol.upper()
+        s = symbol.upper().replace("/", "").replace("-", "")
         if s.startswith("^"):
             return "index"
         if s.endswith("=F"):
@@ -235,7 +271,7 @@ class YFinanceProvider(MarketProvider):
             return "crypto"
         if s in {"BTCUSD", "ETHUSD", "SOLUSD", "XRPUSD", "BNBUSD"}:
             return "crypto"
-        if s in {"EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD"}:
+        if s in {"EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD", "USDEUR", "USDGBP", "JPYUSD", "AUUSD", "CADUSD", "CHFUSD"}:
             return "forex"
         if s in {"XAUUSD", "XAGUSD"}:
             return "metal"
@@ -243,7 +279,9 @@ class YFinanceProvider(MarketProvider):
 
     async def get_quote(self, symbol: str) -> MarketQuote:
         def fetch() -> MarketQuote:
-            ticker_symbol = self._history_symbol(symbol)
+            user_symbol = symbol.strip().upper()
+            _, inverse = self._normalize_pair(user_symbol)
+            ticker_symbol = self._history_symbol(user_symbol)
             ticker = yf.Ticker(ticker_symbol)
             try:
                 info = ticker.fast_info
@@ -294,25 +332,40 @@ class YFinanceProvider(MarketProvider):
             except Exception:
                 market_state = "open" if ts.date() == datetime.now(timezone.utc).date() else "unknown"
 
+            if inverse:
+                price = self._invert_quote(price)
+                previous = self._invert_quote(previous)
+                open_ = self._invert_quote(open_)
+                original_high, original_low = high, low
+                high = self._invert_quote(original_low)
+                low = self._invert_quote(original_high)
+                year_high_original, year_low_original = year_high, year_low
+                year_high = self._invert_quote(year_low_original)
+                year_low = self._invert_quote(year_high_original)
+                pre_market = self._invert_quote(pre_market)
+                post_market = self._invert_quote(post_market)
+
             change = price - previous if previous else None
             change_pct = (change / previous * 100) if previous else None
             return MarketQuote(
-                symbol=symbol.upper(), asset_class=self._classify(symbol), price=price,
+                symbol=user_symbol, asset_class=self._classify(user_symbol), price=price,
                 open=open_, high=high, low=low, volume=volume, change=change,
                 change_percent=change_pct, timestamp=ts, source=self.name, market_status=market_state,
                 previous_close=previous or None, year_high=year_high, year_low=year_low,
-                market_cap=market_cap, pe_ratio=pe_ratio, dividend_yield=dividend_yield,
-                eps=eps, pre_market_price=pre_market, post_market_price=post_market,
+                market_cap=market_cap if not inverse else None, pe_ratio=pe_ratio if not inverse else None,
+                dividend_yield=dividend_yield if not inverse else None, eps=eps if not inverse else None,
+                pre_market_price=pre_market, post_market_price=post_market,
             )
         return await asyncio.to_thread(fetch)
 
     async def get_history(self, symbol: str, period: str = "1mo", interval: str = "1d") -> pd.DataFrame:
         def fetch() -> pd.DataFrame:
+            _, inverse = self._normalize_pair(symbol)
             yf_symbol = self._history_symbol(symbol)
             df = yf.Ticker(yf_symbol).history(period=period, interval=interval, auto_adjust=False)
             if df.empty:
                 raise ValueError(f"No historical data found for {symbol} (Yahoo symbol: {yf_symbol})")
-            return df
+            return self._invert_history(df) if inverse else df
         return await asyncio.to_thread(fetch)
 
 
