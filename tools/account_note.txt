@@ -1,0 +1,1 @@
+Account formatting is implemented directly in app/bot.py; this marker documents the change path.
