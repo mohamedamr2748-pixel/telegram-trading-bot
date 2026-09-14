@@ -18,6 +18,11 @@ from config import settings
 
 # Install before importing app.bot: bot.py creates its MarketService at import time.
 install_market_enrichment()
+
+# Keep the invalid-ticker guide portable and use the dedicated implementation.
+from app.ticker_guide import ticker_format_image
+import app.bot as bot_module
+bot_module.ticker_format_image = ticker_format_image
 from app.bot import build_dispatcher
 
 logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))

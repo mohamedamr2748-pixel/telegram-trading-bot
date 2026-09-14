@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+from io import BytesIO
 
 import pandas as pd
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import Command
 from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from PIL import Image, ImageDraw, ImageFont
 from sqlalchemy import func, select
 
 from app.alerts import create_price_alert, create_smart_alert, list_alerts, remove_alert
@@ -89,6 +91,40 @@ def fmt_quote(q: MarketQuote) -> str:
     )
 
 
+def ticker_format_image() -> BytesIO:
+    image = Image.new("RGB", (1200, 700), "white")
+    draw = ImageDraw.Draw(image)
+    title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 42)
+    heading_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 30)
+    body_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 27)
+    code_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", 30)
+
+    draw.text((70, 55), "Ticker Format Guide", font=title_font, fill="black")
+    draw.text((70, 130), "Enter the ticker exactly as supported by the market data service.", font=body_font, fill="black")
+    draw.text((70, 210), "Examples", font=heading_font, fill="black")
+
+    examples = [
+        ("AAPL", "Apple"),
+        ("NVDA", "NVIDIA"),
+        ("BTC-USD", "Bitcoin"),
+        ("ETH-USD", "Ethereum"),
+        ("GC=F", "Gold Futures"),
+        ("EURUSD=X", "EUR / USD"),
+    ]
+    y = 270
+    for ticker, label in examples:
+        draw.rounded_rectangle((70, y - 8, 1130, y + 48), radius=10, outline="black", width=2)
+        draw.text((95, y), ticker, font=code_font, fill="black")
+        draw.text((430, y + 3), label, font=body_font, fill="black")
+        y += 65
+
+    draw.text((70, 655), "If your ticker is not recognised, check the format and try again.", font=body_font, fill="black")
+    output = BytesIO()
+    image.save(output, format="PNG")
+    output.seek(0)
+    return output
+
+
 async def limit_for_user(user_id: int, username: str | None, key: str) -> bool:
     async with session_factory() as session:
         user = await get_or_create_user(session, user_id, username)
@@ -143,13 +179,13 @@ async def help_cmd(message: Message) -> None:
         "/remove_alert ID\n\n"
         "<b>Account</b>\n"
         "/account\n\n"
-        "<b>Examples</b>\n"
+        "<b>Ticker examples</b>\n"
         "<code>/price AAPL</code>\n"
         "<code>/chart NVDA 3mo</code>\n"
-        "<code>/chart NVDA 3mo advanced</code>\n"
-        "<code>/alert NVDA above 200</code>\n"
-        "<code>/alert BTCUSD pct_down 5</code>\n"
-        "<code>/alert NVDA smart</code>"
+        "<code>/chart BTC-USD 1mo</code>\n"
+        "<code>/chart GC=F 1mo</code>\n"
+        "<code>/chart EURUSD=X 1mo</code>\n\n"
+        "<i>Use the ticker in its exact supported format.</i>"
     )
 
 
@@ -215,7 +251,11 @@ async def price(message: Message) -> None:
 async def chart(message: Message) -> None:
     parts = message.text.split() if message.text else []
     if len(parts) < 2 or len(parts) > 4:
-        await message.answer("Usage: <code>/chart AAPL [1d|5d|1mo|3mo|6mo|1y] [advanced]</code>")
+        await message.answer(
+            "Usage: <code>/chart SYMBOL [1d|5d|1mo|3mo|6mo|1y] [advanced]</code>\n\n"
+            "Use the ticker in its exact supported format.\n"
+            "Examples: <code>AAPL</code> • <code>BTC-USD</code> • <code>GC=F</code>"
+        )
         return
     symbol = parts[1].upper()
     period = parts[2] if len(parts) >= 3 and parts[2].lower() != "advanced" else "1mo"
@@ -232,10 +272,20 @@ async def chart(message: Message) -> None:
     try:
         df = await market.get_history(symbol, period=period, interval=interval)
         image = await render_chart(df, symbol, f"{period}/{interval}", advanced=advanced)
-        caption = f"📈 <b>{symbol}</b> • {period}/{interval}" + (" • advanced" if advanced else "")
+        caption = f"📈 <b>{symbol}</b> • {period}/{interval} • UTC" + (" • advanced" if advanced else "")
         await message.answer_photo(BufferedInputFile(image.getvalue(), filename=f"{symbol}.png"), caption=caption)
+    except ValueError:
+        guide = ticker_format_image()
+        await message.answer_photo(
+            BufferedInputFile(guide.getvalue(), filename="ticker-format-guide.png"),
+            caption=(
+                f"❌ <b>Invalid ticker</b>\n\n"
+                f"We couldn't find chart data for <code>{symbol}</code>.\n\n"
+                "Please check the ticker format and try again."
+            ),
+        )
     except Exception:
-        await message.answer(f"❌ Could not generate a chart for <b>{symbol}</b> right now.")
+        await message.answer(f"⚠️ We couldn't generate a chart for <b>{symbol}</b> right now. Please try again later.")
 
 
 @router.message(Command("news"))
@@ -249,16 +299,11 @@ async def news_cmd(message: Message) -> None:
     if not await limit_or_message(message, "news"):
         return
 
-    # Fast path: a fresh cache is authoritative for the next six hours.
-    # Do this before market verification so repeated /news requests do not
-    # wait on yfinance just to prove a ticker that is already cached.
     await message.answer(f"📩 Request received. Checking cached news for <b>{symbol}</b>...")
     cached_items = await news.get_fresh(symbol, 8)
     if cached_items is not None:
         items = cached_items
     else:
-        # Cache miss/expired cache: validate the symbol before doing an
-        # external news search. The first request can still take longer.
         try:
             await market.get_quote(symbol)
         except Exception:
@@ -537,9 +582,19 @@ async def chart_callback(callback: CallbackQuery) -> None:
     try:
         df = await market.get_history(symbol, "1mo", "1d")
         image = await render_chart(df, symbol, "1mo/1d")
-        await callback.message.answer_photo(BufferedInputFile(image.getvalue(), filename=f"{symbol}.png"), caption=f"📈 <b>{symbol}</b> • 1mo/1d")
+        await callback.message.answer_photo(BufferedInputFile(image.getvalue(), filename=f"{symbol}.png"), caption=f"📈 <b>{symbol}</b> • 1mo/1d • UTC")
+    except ValueError:
+        guide = ticker_format_image()
+        await callback.message.answer_photo(
+            BufferedInputFile(guide.getvalue(), filename="ticker-format-guide.png"),
+            caption=(
+                f"❌ <b>Invalid ticker</b>\n\n"
+                f"We couldn't find chart data for <code>{symbol}</code>.\n\n"
+                "Please check the ticker format and try again."
+            ),
+        )
     except Exception:
-        await callback.message.answer(f"❌ Could not generate a chart for <b>{symbol}</b>.")
+        await callback.message.answer(f"⚠️ We couldn't generate a chart for <b>{symbol}</b> right now. Please try again later.")
     await callback.answer()
 
 

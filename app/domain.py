@@ -3,6 +3,27 @@ from datetime import datetime, timezone
 from typing import Any
 
 
+class DecimalPrice(float):
+    """Float value that never renders using scientific notation."""
+
+    def __str__(self) -> str:
+        return _format_decimal_price(self)
+
+    def __format__(self, format_spec: str) -> str:
+        if "e" in format_spec.lower() or "g" in format_spec.lower():
+            return _format_decimal_price(self)
+        return super().__format__(format_spec)
+
+
+def _format_decimal_price(value: float) -> str:
+    text = f"{float(value):.8f}"
+    return text.rstrip("0").rstrip(".") or "0"
+
+
+def _decimal_price(value: float | None) -> DecimalPrice | None:
+    return None if value is None else DecimalPrice(value)
+
+
 @dataclass(slots=True)
 class MarketQuote:
     symbol: str
@@ -26,6 +47,20 @@ class MarketQuote:
     eps: float | None = None
     pre_market_price: float | None = None
     post_market_price: float | None = None
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "price",
+            "open",
+            "high",
+            "low",
+            "previous_close",
+            "year_high",
+            "year_low",
+            "pre_market_price",
+            "post_market_price",
+        ):
+            setattr(self, field_name, _decimal_price(getattr(self, field_name)))
 
     @property
     def is_stale(self) -> bool:
