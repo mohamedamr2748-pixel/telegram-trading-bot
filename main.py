@@ -23,6 +23,12 @@ install_market_enrichment()
 from app.ticker_guide import ticker_format_image
 import app.bot as bot_module
 bot_module.ticker_format_image = ticker_format_image
+
+# All user-facing chart time labels are UTC. Session classification inside
+# app.charts still uses New York time for U.S. market hours.
+from app.chart_utc import install as install_chart_utc
+install_chart_utc()
+
 from app.bot import build_dispatcher
 
 logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
