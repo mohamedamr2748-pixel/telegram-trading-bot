@@ -43,6 +43,11 @@ bot_module.Message.answer_photo = _chart_answer_photo_with_explicit_utc
 from app.chart_utc import install as install_chart_utc
 install_chart_utc()
 
+# For ranges longer than 1D, colour the chart and headline percentage by the
+# selected chart-period return rather than by today's daily move.
+from app.chart_period_performance import install as install_chart_period_performance
+install_chart_period_performance()
+
 from app.bot import build_dispatcher
 
 logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
