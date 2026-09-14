@@ -95,7 +95,7 @@ async def _render_with_utc_axis_labels(original_render, *args, **kwargs):
 
 async def _locked_render(original_render, lock, *args, **kwargs):
     async with lock:
-        return await _render_with_utc_axis_labels(original_render, lock, *args, **kwargs)
+        return await _render_with_utc_axis_labels(original_render, *args, **kwargs)
 
 
 def install() -> None:
