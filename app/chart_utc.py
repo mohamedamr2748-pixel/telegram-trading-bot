@@ -5,18 +5,6 @@ import asyncio
 import pandas as pd
 
 
-class _PeriodAwarePrice(float):
-    """Keep the real displayed price while making render's change calculation period-aware."""
-
-    def __new__(cls, value: float, period_ratio: float):
-        obj = float.__new__(cls, value)
-        obj._period_ratio = period_ratio
-        return obj
-
-    def __truediv__(self, other):
-        return self._period_ratio
-
-
 def _utc_display_index(index: pd.DatetimeIndex, symbol: str) -> pd.DatetimeIndex:
     """Keep all user-facing chart timestamps in UTC."""
     work = pd.DatetimeIndex(index)
@@ -44,22 +32,6 @@ def _configure_full_day_axis_utc(ax, index: pd.DatetimeIndex, x_positions: list[
     ax.xaxis.get_offset_text().set_visible(False)
 
 
-def _selected_period_price(price: float | None, df: pd.DataFrame, timeframe: str) -> float | None:
-    """Return a price object whose division encodes the selected-period return."""
-    if price is None or timeframe.upper().startswith("1D"):
-        return price
-    if "Close" not in df.columns:
-        return price
-    close = pd.to_numeric(df["Close"], errors="coerce").dropna()
-    if close.empty:
-        return price
-    first = float(close.iloc[0])
-    last = float(close.iloc[-1])
-    if first == 0:
-        return price
-    return _PeriodAwarePrice(float(price), last / first)
-
-
 async def _render_with_utc_axis_labels(original_render, *args, **kwargs):
     """Render charts with UTC labels and selected-period performance colour."""
     df = args[0] if args else kwargs.get("df")
@@ -67,15 +39,28 @@ async def _render_with_utc_axis_labels(original_render, *args, **kwargs):
     upper = timeframe.upper()
     intraday = upper.startswith("1D") or upper.startswith("5D")
 
-    if isinstance(df, pd.DataFrame) and not upper.startswith("1D"):
-        actual_price = args[4] if len(args) > 4 else kwargs.get("price")
-        adjusted_price = _selected_period_price(actual_price, df, timeframe)
-        if len(args) > 4:
-            args = list(args)
-            args[4] = adjusted_price
-            args = tuple(args)
-        elif adjusted_price is not None:
-            kwargs["price"] = adjusted_price
+    # For longer ranges, the chart line/headline must reflect the selected
+    # period rather than today's move. The existing renderer derives its
+    # colour from price / previous_close, so temporarily make that previous
+    # close equal to the first close in the selected range. This preserves the
+    # real current price and all market metadata while changing only the
+    # performance reference used by the chart renderer.
+    original_correct_previous = None
+    if isinstance(df, pd.DataFrame) and not intraday and "Close" in df.columns:
+        close = pd.to_numeric(df["Close"], errors="coerce").dropna()
+        if not close.empty:
+            period_start = float(close.iloc[0])
+            kwargs["prev_close"] = period_start
+
+            from app import charts
+            original_correct_previous = charts._correct_yfinance_previous_close
+
+            async def _period_start_previous(symbol, quote, frame):
+                if not str(frame).upper().startswith("1D"):
+                    return period_start
+                return await original_correct_previous(symbol, quote, frame)
+
+            charts._correct_yfinance_previous_close = _period_start_previous
 
     from app import charts
 
@@ -89,6 +74,8 @@ async def _render_with_utc_axis_labels(original_render, *args, **kwargs):
     try:
         return await original_render(*args, **kwargs)
     finally:
+        if original_correct_previous is not None:
+            charts._correct_yfinance_previous_close = original_correct_previous
         if not intraday:
             charts.mdates.DateFormatter = original_formatter
 
