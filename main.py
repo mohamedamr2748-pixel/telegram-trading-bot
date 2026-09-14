@@ -24,6 +24,20 @@ from app.ticker_guide import ticker_format_image
 import app.bot as bot_module
 bot_module.ticker_format_image = ticker_format_image
 
+# Make the timezone explicit on every chart caption without changing any
+# non-chart photo captions.
+_original_answer_photo = bot_module.Message.answer_photo
+
+
+async def _chart_answer_photo_with_explicit_utc(self, *args, **kwargs):
+    caption = kwargs.get("caption")
+    if caption and caption.startswith("📈 ") and " • UTC" in caption:
+        kwargs["caption"] = caption.replace(" • UTC", " • UTC Timezone", 1)
+    return await _original_answer_photo(self, *args, **kwargs)
+
+
+bot_module.Message.answer_photo = _chart_answer_photo_with_explicit_utc
+
 # All user-facing chart time labels are UTC. Session classification inside
 # app.charts still uses New York time for U.S. market hours.
 from app.chart_utc import install as install_chart_utc
