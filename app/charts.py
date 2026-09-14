@@ -62,12 +62,8 @@ def _display_index(index: pd.DatetimeIndex, symbol: str) -> pd.DatetimeIndex:
     if upper.endswith("-USD") or upper in {"BTCUSD", "ETHUSD", "SOLUSD", "XRPUSD", "BNBUSD"}:
         return index
     try:
-        if getattr(index, "tz", None) is None:
-            utc_index = index.tz_localize("UTC")
-        else:
-            utc_index = index.tz_convert("UTC")
-        return utc_index.tz_convert("America/New_York").tz_localize(None)
-    except (TypeError, ValueError):
+        return index.tz_localize("UTC").tz_convert("America/New_York").tz_localize(None)
+    except TypeError:
         return index
 
 
@@ -169,28 +165,24 @@ def _asset_stats_rows(symbol: str, quote: MarketQuote | None, stats: dict[str, s
     asset = (quote.asset_class if quote else "stock").lower()
     normalized = symbol.upper().replace("/", "").replace("-", "")
     digits = _price_digits(symbol, quote)
-
     if asset == "forex" or normalized in {"EURUSD", "USDEUR", "GBPUSD", "USDGBP", "USDJPY", "JPYUSD", "AUDUSD", "USDAUD", "AUUSD", "USDCAD", "CADUSD", "USDCHF", "CHFUSD", "NZDUSD", "USDNZD"}:
         return [
             [("Open", _fmt_value(stats["Open"], digits)), ("Previous", _fmt_value(quote.previous_close, digits) if quote else "n/a"), ("Day change", _fmt_percent(change_percent))],
             [("High", _fmt_value(stats["High"], digits)), ("52-wk high", _fmt_value(quote.year_high, digits) if quote else "n/a"), ("52-wk low", _fmt_value(quote.year_low, digits) if quote else "n/a")],
             [("Low", _fmt_value(stats["Low"], digits)), ("Session", _status_text(quote)), ("Updated", quote.timestamp.strftime("%H:%M UTC") if quote else "n/a")],
         ]
-
     if asset == "crypto":
         return [
             [("Open", _fmt_value(stats["Open"])), ("Previous", _fmt_value(quote.previous_close) if quote else "n/a"), ("24h volume", _fmt_value(quote.volume, 0) if quote else stats["Volume"])],
             [("High", _fmt_value(stats["High"])), ("52-wk high", _fmt_value(quote.year_high) if quote else "n/a"), ("52-wk low", _fmt_value(quote.year_low) if quote else "n/a")],
             [("Low", _fmt_value(stats["Low"])), ("Session", _status_text(quote)), ("Updated", quote.timestamp.strftime("%H:%M UTC") if quote else "n/a")],
         ]
-
     if asset in {"metal", "commodity"}:
         return [
             [("Open", stats["Open"]), ("Previous", _fmt_value(quote.previous_close) if quote else "n/a"), ("Day change", _fmt_percent(change_percent))],
             [("High", stats["High"]), ("52-wk high", _fmt_value(quote.year_high) if quote else "n/a"), ("52-wk low", _fmt_value(quote.year_low) if quote else "n/a")],
             [("Low", stats["Low"]), ("Session", _status_text(quote)), ("Updated", quote.timestamp.strftime("%H:%M UTC") if quote else "n/a")],
         ]
-
     return [
         [("Open", stats["Open"]), ("Mkt cap", _fmt_value(quote.market_cap) if quote else "n/a"), ("Dividend", _fmt_meta(quote.dividend_yield, percent=True) if quote else "n/a")],
         [("High", stats["High"]), ("P/E ratio", _fmt_meta(quote.pe_ratio) if quote else "n/a"), ("After hours", _after_hours(quote))],
@@ -235,7 +227,7 @@ def _regular_session_stats(frame: pd.DataFrame, symbol: str) -> dict[str, str]:
     }
 
 
-def _plot_full_day_continuous(ax, index: pd.DatetimeIndex, y: pd.Series, regular_color: str, bottom: float) -> None:
+def _plot_full_day_continuous(ax, index: pd.DatetimeIndex, y: pd.Series, regular_color: str, bottom: float) -> list[float]:
     x = _compressed_intraday_positions(index)
     regular_mask = _regular_session_mask(index).to_numpy(dtype=bool)
     values = y.to_numpy(dtype=float)
@@ -245,7 +237,6 @@ def _plot_full_day_continuous(ax, index: pd.DatetimeIndex, y: pd.Series, regular
         alpha = 0.11 if segment_regular else 0.055
         ax.plot([x[i], x[i + 1]], [values[i], values[i + 1]], linewidth=2.55, color=color, solid_capstyle="round", solid_joinstyle="round", antialiased=True, zorder=4)
         ax.fill_between([x[i], x[i + 1]], [values[i], values[i + 1]], bottom, color=color, alpha=alpha, zorder=1, antialiased=True)
-
     last_color = regular_color if regular_mask[-1] else _EXTENDED_GREY
     ax.scatter([x[-1]], [values[-1]], s=50, color=last_color, edgecolor="#202124", linewidth=1.5, zorder=6, antialiased=True)
     return x
@@ -263,6 +254,10 @@ def _configure_full_day_axis(ax, index: pd.DatetimeIndex, x_positions: list[floa
     ax.set_xticks(ticks)
     ax.set_xticklabels(labels)
     ax.xaxis.get_offset_text().set_visible(False)
+
+
+def _correct_previous_close_legacy(*args, **kwargs):
+    return None
 
 
 async def _correct_yfinance_previous_close(symbol: str, quote: MarketQuote | None, timeframe: str) -> float | None:
