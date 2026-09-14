@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+from datetime import time
 
 import matplotlib
 matplotlib.use("Agg")
@@ -27,6 +28,10 @@ _CHART_STYLE = mpf.make_mpf_style(
     y_on_right=True,
     rc={"axes.labelsize": 10, "axes.titlesize": 15, "xtick.labelsize": 9, "ytick.labelsize": 9, "font.size": 10, "figure.dpi": _ADVANCED_DPI, "savefig.dpi": _ADVANCED_DPI},
 )
+
+_REGULAR_OPEN = time(9, 30)
+_REGULAR_CLOSE = time(16, 0)
+_EXTENDED_GREY = "#9aa0a6"
 
 
 def _clean_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
@@ -57,8 +62,12 @@ def _display_index(index: pd.DatetimeIndex, symbol: str) -> pd.DatetimeIndex:
     if upper.endswith("-USD") or upper in {"BTCUSD", "ETHUSD", "SOLUSD", "XRPUSD", "BNBUSD"}:
         return index
     try:
-        return index.tz_localize("UTC").tz_convert("America/New_York").tz_localize(None)
-    except TypeError:
+        if getattr(index, "tz", None) is None:
+            utc_index = index.tz_localize("UTC")
+        else:
+            utc_index = index.tz_convert("UTC")
+        return utc_index.tz_convert("America/New_York").tz_localize(None)
+    except (TypeError, ValueError):
         return index
 
 
@@ -189,6 +198,73 @@ def _asset_stats_rows(symbol: str, quote: MarketQuote | None, stats: dict[str, s
     ]
 
 
+def _regular_session_mask(index: pd.DatetimeIndex) -> pd.Series:
+    aware = pd.DatetimeIndex(index)
+    if getattr(aware, "tz", None) is None:
+        aware = aware.tz_localize("UTC")
+    ny = aware.tz_convert("America/New_York")
+    return pd.Series((ny.time >= _REGULAR_OPEN) & (ny.time < _REGULAR_CLOSE), index=index)
+
+
+def _compressed_intraday_positions(index: pd.DatetimeIndex) -> list[float]:
+    return [float(i) for i in range(len(index))]
+
+
+def _is_full_day_us_intraday(symbol: str, quote: MarketQuote | None, timeframe: str) -> bool:
+    if not timeframe.upper().startswith("1D"):
+        return False
+    asset = (quote.asset_class if quote else "").lower()
+    normalized = symbol.strip().upper()
+    return asset in {"stock", "index"} or normalized.startswith("^")
+
+
+def _regular_session_stats(frame: pd.DataFrame, symbol: str) -> dict[str, str]:
+    work = frame.copy()
+    work.index = pd.to_datetime(work.index, utc=True)
+    ny = work.index.tz_convert("America/New_York")
+    mask = (ny.time >= _REGULAR_OPEN) & (ny.time < _REGULAR_CLOSE)
+    regular = work.loc[mask]
+    if regular.empty:
+        return _session_stats(frame, symbol)
+    volume = regular["Volume"].sum() if "Volume" in regular.columns else None
+    return {
+        "Open": _fmt_value(regular["Open"].iloc[0]),
+        "High": _fmt_value(regular["High"].max()),
+        "Low": _fmt_value(regular["Low"].min()),
+        "Volume": _fmt_value(volume, 0),
+    }
+
+
+def _plot_full_day_continuous(ax, index: pd.DatetimeIndex, y: pd.Series, regular_color: str, bottom: float) -> None:
+    x = _compressed_intraday_positions(index)
+    regular_mask = _regular_session_mask(index).to_numpy(dtype=bool)
+    values = y.to_numpy(dtype=float)
+    for i in range(len(values) - 1):
+        segment_regular = regular_mask[i] and regular_mask[i + 1]
+        color = regular_color if segment_regular else _EXTENDED_GREY
+        alpha = 0.11 if segment_regular else 0.055
+        ax.plot([x[i], x[i + 1]], [values[i], values[i + 1]], linewidth=2.55, color=color, solid_capstyle="round", solid_joinstyle="round", antialiased=True, zorder=4)
+        ax.fill_between([x[i], x[i + 1]], [values[i], values[i + 1]], bottom, color=color, alpha=alpha, zorder=1, antialiased=True)
+
+    last_color = regular_color if regular_mask[-1] else _EXTENDED_GREY
+    ax.scatter([x[-1]], [values[-1]], s=50, color=last_color, edgecolor="#202124", linewidth=1.5, zorder=6, antialiased=True)
+    return x
+
+
+def _configure_full_day_axis(ax, index: pd.DatetimeIndex, x_positions: list[float]) -> None:
+    if len(index) <= 1:
+        ax.set_xticks(x_positions)
+        return
+    count = min(8, len(index))
+    sample = [round(i * (len(index) - 1) / (count - 1)) for i in range(count)] if count > 1 else [0]
+    sample = list(dict.fromkeys(sample))
+    ticks = [x_positions[i] for i in sample]
+    labels = [pd.Timestamp(index[i]).tz_convert("America/New_York").strftime("%H:%M") if pd.Timestamp(index[i]).tzinfo is not None else pd.Timestamp(index[i]).strftime("%H:%M") for i in sample]
+    ax.set_xticks(ticks)
+    ax.set_xticklabels(labels)
+    ax.xaxis.get_offset_text().set_visible(False)
+
+
 async def _correct_yfinance_previous_close(symbol: str, quote: MarketQuote | None, timeframe: str) -> float | None:
     if quote is None or quote.source != "yfinance" or not timeframe.upper().startswith("1D"):
         return quote.previous_close if quote else None
@@ -248,7 +324,7 @@ async def render_google_finance_chart(df: pd.DataFrame, symbol: str, timeframe: 
     if change_percent is None and previous:
         change_percent = (last_price / previous - 1.0) * 100.0
     period_perf = _period_performance(series, timeframe, change_percent)
-    stats = _session_stats(work, symbol)
+    stats = _regular_session_stats(work, symbol) if _is_full_day_us_intraday(symbol, quote, timeframe) else _session_stats(work, symbol)
     digits = _price_digits(symbol, quote)
     currency_text = f" {currency}" if currency else ""
 
@@ -268,12 +344,18 @@ async def render_google_finance_chart(df: pd.DataFrame, symbol: str, timeframe: 
         line_color = "#55e982"
     else:
         line_color = "#f26b63"
-    ax.plot(x, y, linewidth=2.55, color=line_color, solid_capstyle="round", solid_joinstyle="round", antialiased=True, zorder=4)
-    ax.fill_between(x, y, chart_bottom, color=line_color, alpha=0.11, zorder=1, antialiased=True)
+
+    if _is_full_day_us_intraday(symbol, quote, timeframe):
+        x_positions = _plot_full_day_continuous(ax, work.index, pd.Series(y, index=work.index), line_color, chart_bottom)
+    else:
+        ax.plot(x, y, linewidth=2.55, color=line_color, solid_capstyle="round", solid_joinstyle="round", antialiased=True, zorder=4)
+        ax.fill_between(x, y, chart_bottom, color=line_color, alpha=0.11, zorder=1, antialiased=True)
+        ax.scatter([x[-1]], [y[-1]], s=50, color=line_color, edgecolor="#202124", linewidth=1.5, zorder=6, antialiased=True)
+        x_positions = None
+
     if previous is not None:
         ax.axhline(previous, linewidth=1.0, linestyle=(0, (5, 6)), color="#e4e7eb", alpha=0.85, zorder=2)
         ax.text(1.002, previous, f"Prev close\n{previous:.{digits}f}", transform=ax.get_yaxis_transform(), ha="left", va="center", fontsize=8.5, color="#d5d8de", linespacing=1.08)
-    ax.scatter([x[-1]], [y[-1]], s=50, color=line_color, edgecolor="#202124", linewidth=1.5, zorder=6, antialiased=True)
     ax.set_ylim(chart_bottom, chart_top)
     ax.grid(axis="y", color="#34373b", linestyle="-", linewidth=0.65, alpha=0.75)
     ax.grid(axis="x", color="#34373b", linestyle="--", linewidth=0.55, alpha=0.55)
@@ -281,11 +363,15 @@ async def render_google_finance_chart(df: pd.DataFrame, symbol: str, timeframe: 
         spine.set_visible(False)
     ax.tick_params(colors="#d7dbe2", labelsize=8.5, length=0, pad=8)
     ax.yaxis.tick_right()
-    locator = mdates.AutoDateLocator(minticks=4, maxticks=6)
-    ax.xaxis.set_major_locator(locator)
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
-    ax.xaxis.get_offset_text().set_visible(False)
-    ax.set_xlim(x[0], x[-1])
+    if x_positions is not None:
+        _configure_full_day_axis(ax, work.index, x_positions)
+        ax.set_xlim(x_positions[0], x_positions[-1])
+    else:
+        locator = mdates.AutoDateLocator(minticks=4, maxticks=6)
+        ax.xaxis.set_major_locator(locator)
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+        ax.xaxis.get_offset_text().set_visible(False)
+        ax.set_xlim(x[0], x[-1])
 
     price_line = f"{last_price:.{digits}f}{currency_text}"
     if change_percent is not None:
@@ -314,9 +400,9 @@ async def render_google_finance_chart(df: pd.DataFrame, symbol: str, timeframe: 
 
     rows = _asset_stats_rows(symbol, quote, stats, change_percent)
     y_positions = [0.225, 0.182, 0.139]
-    x_positions = [0.055, 0.36, 0.66]
+    x_positions_text = [0.055, 0.36, 0.66]
     for ypos, row in zip(y_positions, rows):
-        for xpos, (label, value) in zip(x_positions, row):
+        for xpos, (label, value) in zip(x_positions_text, row):
             fig.text(xpos, ypos, label, ha="left", va="center", fontsize=9.0, color="#9aa0a6")
             fig.text(xpos + 0.10, ypos, value, ha="left", va="center", fontsize=10.0, fontweight="bold", color="#f8fafc")
 
