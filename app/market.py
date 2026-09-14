@@ -365,7 +365,14 @@ class YFinanceProvider(MarketProvider):
         def fetch() -> pd.DataFrame:
             _, inverse = self._normalize_pair(symbol)
             yf_symbol = self._history_symbol(symbol)
-            df = yf.Ticker(yf_symbol).history(period=period, interval=interval, auto_adjust=False)
+            ticker = yf.Ticker(yf_symbol)
+            history_kwargs = {"period": period, "interval": interval, "auto_adjust": False}
+            # Request extended-hours observations only for intraday U.S.
+            # equities/indices. The chart renderer compresses the resulting
+            # sessions into one continuous visual day without changing prices.
+            if interval.endswith(("m", "h")) and self._classify(symbol) in {"stock", "index"} and not inverse:
+                history_kwargs["prepost"] = True
+            df = ticker.history(**history_kwargs)
             if df.empty:
                 raise ValueError(f"No historical data found for {symbol} (Yahoo symbol: {yf_symbol})")
             return self._invert_history(df) if inverse else df
