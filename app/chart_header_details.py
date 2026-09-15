@@ -3,19 +3,20 @@ from __future__ import annotations
 import io
 from typing import Any
 
+import matplotlib.font_manager as fm
 import pandas as pd
 from PIL import Image, ImageDraw, ImageFont
 
 
 def _font(size: int, bold: bool = False):
-    path = (
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-        if bold
-        else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-    )
+    weight = "bold" if bold else "normal"
     try:
+        path = fm.findfont(
+            fm.FontProperties(family="DejaVu Sans", weight=weight),
+            fallback_to_default=True,
+        )
         return ImageFont.truetype(path, size)
-    except OSError:
+    except (OSError, ValueError):
         return ImageFont.load_default()
 
 
@@ -135,6 +136,8 @@ async def _render_with_header(original_render, *args, **kwargs) -> io.BytesIO:
     divider = "#34373b"
 
     x = int(width * 0.035)
+    # Deliberately use a substantially larger fixed size so the four metadata
+    # rows remain readable on a phone after Telegram's image scaling.
     meta_size = max(48, int(width / 32))
     small = _font(meta_size, bold=False)
     values = _font(meta_size, bold=True)
