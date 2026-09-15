@@ -10,7 +10,7 @@ import mplfinance as mpf
 import pandas as pd
 from matplotlib.patches import FancyBboxPatch
 
-from app.chart_sessions import AssetKind, SessionKind, TradingFrame, UTC, build_frame, classify_timestamp
+from app.chart_sessions import SessionKind, TradingFrame, UTC, build_frame, classify_timestamp
 from app.domain import MarketQuote
 from app.indicators import add_advanced_indicators
 
@@ -29,7 +29,15 @@ _CHART_STYLE = mpf.make_mpf_style(
     gridstyle=":",
     gridaxis="both",
     y_on_right=True,
-    rc={"axes.labelsize": 10, "axes.titlesize": 15, "xtick.labelsize": 9, "ytick.labelsize": 9, "font.size": 10, "figure.dpi": _ADVANCED_DPI, "savefig.dpi": _ADVANCED_DPI},
+    rc={
+        "axes.labelsize": 10,
+        "axes.titlesize": 15,
+        "xtick.labelsize": 9,
+        "ytick.labelsize": 9,
+        "font.size": 10,
+        "figure.dpi": _ADVANCED_DPI,
+        "savefig.dpi": _ADVANCED_DPI,
+    },
 )
 
 
@@ -53,20 +61,24 @@ def _clean_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _prepare_price_series(df: pd.DataFrame) -> pd.DataFrame:
-    """Clean real price observations without creating synthetic observations."""
     if "Close" not in df.columns:
         raise ValueError("Chart requires a Close/price series")
     work = df.copy()
-    parsed = pd.to_datetime(work.index, utc=True, errors="coerce")
-    work.index = parsed
-    work = work[~work.index.isna()]
+    if not isinstance(work.index, pd.DatetimeIndex):
+        work.index = pd.to_datetime(work.index, utc=True, errors="coerce")
+    else:
+        if work.index.tz is None:
+            work.index = work.index.tz_localize("UTC")
+        else:
+            work.index = work.index.tz_convert("UTC")
+    work = work[work.index.notna()]
     work["Close"] = pd.to_numeric(work["Close"], errors="coerce")
     work = work.dropna(subset=["Close"])
     work = work[~work.index.duplicated(keep="last")].sort_index()
-    if work.empty:
-        raise ValueError("No valid price points available for chart")
     if len(work) > 2500:
         work = work.iloc[-2500:]
+    if work.empty:
+        raise ValueError("No valid price points available for chart")
     return work
 
 
@@ -75,7 +87,6 @@ def _line(series: pd.Series, panel: int, color: str, width: float = 1.0, linesty
 
 
 def _display_index(index: pd.DatetimeIndex, symbol: str) -> pd.DatetimeIndex:
-    """Return the chart display index in UTC; kept for compatibility."""
     work = pd.DatetimeIndex(index)
     if work.tz is None:
         return work.tz_localize(UTC)
@@ -83,7 +94,6 @@ def _display_index(index: pd.DatetimeIndex, symbol: str) -> pd.DatetimeIndex:
 
 
 def _fmt_value(value: object, digits: int = 2) -> str:
-    """Readable decimal formatting that never falls back to scientific notation."""
     if value is None or pd.isna(value):
         return "n/a"
     try:
@@ -123,7 +133,12 @@ def _fmt_meta(value: float | None, percent: bool = False) -> str:
 def _price_digits(symbol: str, quote: MarketQuote | None) -> int:
     asset = (quote.asset_class if quote else "").lower()
     normalized = symbol.upper().replace("/", "").replace("-", "")
-    if asset == "forex" or normalized in {"EURUSD", "USDEUR", "GBPUSD", "USDGBP", "USDJPY", "JPYUSD", "AUDUSD", "USDAUD", "AUUSD", "USDCAD", "CADUSD", "USDCHF", "CHFUSD", "NZDUSD", "USDNZD"}:
+    forex_symbols = {
+        "EURUSD", "USDEUR", "GBPUSD", "USDGBP", "USDJPY", "JPYUSD",
+        "AUDUSD", "USDAUD", "AUUSD", "USDCAD", "CADUSD", "USDCHF",
+        "CHFUSD", "NZDUSD", "USDNZD",
+    }
+    if asset == "forex" or normalized in forex_symbols:
         return 5 if "JPY" not in normalized else 3
     return 2
 
@@ -155,7 +170,12 @@ def _session_stats(df: pd.DataFrame, symbol: str) -> dict[str, str]:
     high = session["High"].max() if "High" in session.columns else session["Close"].max()
     low = session["Low"].min() if "Low" in session.columns else session["Close"].min()
     volume = session["Volume"].sum() if "Volume" in session.columns else None
-    return {"Open": _fmt_value(opening), "High": _fmt_value(high), "Low": _fmt_value(low), "Volume": _fmt_value(volume, 0)}
+    return {
+        "Open": _fmt_value(opening),
+        "High": _fmt_value(high),
+        "Low": _fmt_value(low),
+        "Volume": _fmt_value(volume, 0),
+    }
 
 
 def _regular_session_stats(df: pd.DataFrame, frame: TradingFrame, symbol: str) -> dict[str, str]:
@@ -169,7 +189,12 @@ def _regular_session_stats(df: pd.DataFrame, frame: TradingFrame, symbol: str) -
     high = regular["High"].max() if "High" in regular.columns else regular["Close"].max()
     low = regular["Low"].min() if "Low" in regular.columns else regular["Close"].min()
     volume = regular["Volume"].sum() if "Volume" in regular.columns else None
-    return {"Open": _fmt_value(opening), "High": _fmt_value(high), "Low": _fmt_value(low), "Volume": _fmt_value(volume, 0)}
+    return {
+        "Open": _fmt_value(opening),
+        "High": _fmt_value(high),
+        "Low": _fmt_value(low),
+        "Volume": _fmt_value(volume, 0),
+    }
 
 
 def _status_text(quote: MarketQuote | None) -> str:
@@ -187,18 +212,16 @@ def _after_hours(quote: MarketQuote | None) -> str:
     return f"{_fmt_value(quote.post_market_price)}  ({_fmt_percent(move)})" if move is not None else _fmt_value(quote.post_market_price)
 
 
-def _pre_market(quote: MarketQuote | None) -> str:
-    if not quote or quote.pre_market_price is None:
-        return "n/a"
-    move = ((quote.pre_market_price / quote.previous_close) - 1) * 100 if quote.previous_close else None
-    return f"{_fmt_value(quote.pre_market_price)}  ({_fmt_percent(move)})" if move is not None else _fmt_value(quote.pre_market_price)
-
-
 def _asset_stats_rows(symbol: str, quote: MarketQuote | None, stats: dict[str, str], change_percent: float | None) -> list[list[tuple[str, str]]]:
     asset = (quote.asset_class if quote else "stock").lower()
     normalized = symbol.upper().replace("/", "").replace("-", "")
     digits = _price_digits(symbol, quote)
-    forex = asset == "forex" or normalized in {"EURUSD", "USDEUR", "GBPUSD", "USDGBP", "USDJPY", "JPYUSD", "AUDUSD", "USDAUD", "AUUSD", "USDCAD", "CADUSD", "USDCHF", "CHFUSD", "NZDUSD", "USDNZD"}
+    forex_symbols = {
+        "EURUSD", "USDEUR", "GBPUSD", "USDGBP", "USDJPY", "JPYUSD",
+        "AUDUSD", "USDAUD", "AUUSD", "USDCAD", "CADUSD", "USDCHF",
+        "CHFUSD", "NZDUSD", "USDNZD",
+    }
+    forex = asset == "forex" or normalized in forex_symbols
     if forex:
         return [
             [("Open", _fmt_value(stats["Open"], digits)), ("Previous", _fmt_value(quote.previous_close, digits) if quote else "n/a"), ("Day change", _fmt_percent(change_percent))],
@@ -225,11 +248,9 @@ def _asset_stats_rows(symbol: str, quote: MarketQuote | None, stats: dict[str, s
 
 
 def _regular_session_mask(index: pd.DatetimeIndex) -> pd.Series:
-    """Compatibility helper backed by the centralized session model."""
     aware = pd.DatetimeIndex(index)
     if aware.tz is None:
         aware = aware.tz_localize(UTC)
-    # For mixed-date data, classify each timestamp against its own ET date.
     values = []
     for stamp in aware:
         et_date = stamp.tz_convert("America/New_York").date()
@@ -238,12 +259,24 @@ def _regular_session_mask(index: pd.DatetimeIndex) -> pd.Series:
 
 
 def _is_full_day_us_intraday(symbol: str, quote: MarketQuote | None, timeframe: str) -> bool:
-    return timeframe.upper().startswith("1D") and build_frame(symbol, pd.Timestamp.now(tz=UTC), quote.asset_class if quote else None) is not None
+    return timeframe.upper().startswith("1D") and build_frame(
+        symbol, pd.Timestamp.now(tz=UTC), quote.asset_class if quote else None
+    ) is not None
 
 
-async def _correct_yfinance_previous_close(symbol: str, quote: MarketQuote | None, timeframe: str) -> float | None:
+async def _correct_yfinance_previous_close(
+    symbol: str,
+    quote: MarketQuote | None,
+    timeframe: str,
+    trading_date_iso: str | None,
+) -> float | None:
     if quote is None or quote.source != "yfinance" or not timeframe.upper().startswith("1D"):
         return quote.previous_close if quote else None
+    if (
+        quote.corrected_previous_close is not None
+        and quote.corrected_for_trading_date == trading_date_iso
+    ):
+        return quote.corrected_previous_close
     try:
         from app.market import MarketService
         daily = await MarketService().get_history(symbol, period="5d", interval="1d")
@@ -253,7 +286,10 @@ async def _correct_yfinance_previous_close(symbol: str, quote: MarketQuote | Non
         daily["Close"] = pd.to_numeric(daily["Close"], errors="coerce")
         daily = daily.dropna(subset=["Close"]).sort_index()
         if len(daily) >= 2:
-            return float(daily["Close"].iloc[-2])
+            corrected = float(daily["Close"].iloc[-2])
+            quote.corrected_previous_close = corrected
+            quote.corrected_for_trading_date = trading_date_iso
+            return corrected
     except Exception:
         pass
     return quote.previous_close
@@ -265,34 +301,66 @@ def _selector_key(timeframe: str) -> str | None:
     return next((label for prefix, label in mapping if upper.startswith(prefix)), None)
 
 
+def _draw_session_bands(ax, frame: TradingFrame, regular_colour: str) -> None:
+    """Show the fixed trading-session frame without inventing any prices."""
+    if frame.premarket_utc is not None:
+        start, end = frame.premarket_utc
+        ax.axvspan(start.to_pydatetime(), end.to_pydatetime(), facecolor=_EXTENDED_GREY, alpha=0.035, zorder=0)
+    if frame.regular_utc is not None:
+        start, end = frame.regular_utc
+        ax.axvspan(start.to_pydatetime(), end.to_pydatetime(), facecolor=regular_colour, alpha=0.014, zorder=0)
+    if frame.aftermarket_utc is not None:
+        start, end = frame.aftermarket_utc
+        ax.axvspan(start.to_pydatetime(), end.to_pydatetime(), facecolor=_EXTENDED_GREY, alpha=0.035, zorder=0)
+
+
 def _plot_session_coloured_line(ax, index: pd.DatetimeIndex, values, frame: TradingFrame, regular_colour: str, bottom: float) -> None:
     if len(index) == 0 or frame.trading_date is None:
         return
     kinds = [classify_timestamp(ts, frame.trading_date) for ts in index]
     numeric = pd.Series(values, index=index).to_numpy(dtype=float)
     for i in range(len(index) - 1):
-        # Never bridge a missing-data gap. A line segment is only valid when
-        # consecutive observations are close enough to represent one interval.
         gap = index[i + 1] - index[i]
         if gap > pd.Timedelta(hours=2):
             continue
         regular = kinds[i] is SessionKind.REGULAR and kinds[i + 1] is SessionKind.REGULAR
         colour = regular_colour if regular else _EXTENDED_GREY
         alpha = 0.11 if regular else 0.055
-        ax.plot(index[i:i + 2], numeric[i:i + 2], linewidth=2.55, color=colour, solid_capstyle="round", solid_joinstyle="round", antialiased=True, zorder=4)
+        ax.plot(
+            index[i:i + 2],
+            numeric[i:i + 2],
+            linewidth=2.55,
+            color=colour,
+            solid_capstyle="round",
+            solid_joinstyle="round",
+            antialiased=True,
+            zorder=4,
+        )
         ax.fill_between(index[i:i + 2], numeric[i:i + 2], bottom, color=colour, alpha=alpha, zorder=1, antialiased=True)
     last_colour = regular_colour if kinds[-1] is SessionKind.REGULAR else _EXTENDED_GREY
     ax.scatter([index[-1]], [numeric[-1]], s=50, color=last_colour, edgecolor="#202124", linewidth=1.5, zorder=6, antialiased=True)
 
 
 def _configure_us_equity_x_axis(ax, frame: TradingFrame) -> None:
-    ax.set_xlim(frame.x_min_utc.to_pydatetime(), frame.x_max_utc.to_pydatetime())
+    x_min = mdates.date2num(frame.x_min_utc.to_pydatetime())
+    x_max = mdates.date2num(frame.x_max_utc.to_pydatetime())
+    pad = (x_max - x_min) * 0.03
+    ax.set_xlim(x_min - pad, x_max + pad)
     ax.xaxis.set_major_locator(mdates.HourLocator(byhour=range(0, 24, 2), tz=UTC))
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M", tz=UTC))
     ax.xaxis.get_offset_text().set_visible(False)
 
 
-async def render_google_finance_chart(df: pd.DataFrame, symbol: str, timeframe: str, prev_close: float | None = None, price: float | None = None, currency: str | None = None, change_percent: float | None = None, quote: MarketQuote | None = None) -> io.BytesIO:
+async def render_google_finance_chart(
+    df: pd.DataFrame,
+    symbol: str,
+    timeframe: str,
+    prev_close: float | None = None,
+    price: float | None = None,
+    currency: str | None = None,
+    change_percent: float | None = None,
+    quote: MarketQuote | None = None,
+) -> io.BytesIO:
     work = _prepare_price_series(df)
     if quote is None and (prev_close is None or price is None or change_percent is None):
         try:
@@ -300,29 +368,41 @@ async def render_google_finance_chart(df: pd.DataFrame, symbol: str, timeframe: 
             quote = await MarketService().get_quote(symbol)
         except Exception:
             quote = None
+
     if quote is not None:
         price = quote.price if price is None else price
         currency = currency or ("USD" if quote.asset_class in {"stock", "index", "commodity", "metal", "forex", "market"} else None)
-        corrected_previous = await _correct_yfinance_previous_close(symbol, quote, timeframe)
-        if prev_close is None or quote.source == "yfinance":
-            prev_close = corrected_previous
+        if prev_close is None and quote.previous_close is not None:
+            prev_close = quote.previous_close
         if prev_close and prev_close > 0 and price is not None:
             change_percent = (price / prev_close - 1.0) * 100.0
         elif change_percent is None:
             change_percent = quote.change_percent
 
     is_1d = timeframe.upper().startswith("1D")
+    frame = build_frame(symbol, work.index[-1], quote.asset_class if quote else None) if is_1d else None
+    trading_date_iso = frame.trading_date.isoformat() if frame and frame.trading_date else None
+
+    if quote is not None and quote.source == "yfinance" and is_1d:
+        corrected_previous = await _correct_yfinance_previous_close(symbol, quote, timeframe, trading_date_iso)
+        if corrected_previous is not None:
+            prev_close = corrected_previous
+            if price is not None and prev_close > 0:
+                change_percent = (price / prev_close - 1.0) * 100.0
+
     last_price = float(price) if price is not None else float(work["Close"].iloc[-1])
     previous = float(prev_close) if prev_close and prev_close > 0 else None
+    first_close = float(work["Close"].iloc[0])
     if is_1d:
         if change_percent is None and previous:
             change_percent = (last_price / previous - 1.0) * 100.0
+        elif change_percent is None and first_close > 0 and len(work) >= 2:
+            change_percent = (last_price / first_close - 1.0) * 100.0
     else:
-        first = float(work["Close"].iloc[0])
-        change_percent = (last_price / first - 1.0) * 100.0 if first else None
-        previous = first
+        if first_close > 0:
+            change_percent = (last_price / first_close - 1.0) * 100.0
+        previous = first_close
 
-    frame = build_frame(symbol, work.index[-1], quote.asset_class if quote else None) if is_1d else None
     period_perf = _period_performance(work["Close"], timeframe, change_percent)
     line_color = _REGULAR_GREEN if period_perf is not None and period_perf > 1e-12 else _REGULAR_RED if period_perf is not None and period_perf < -1e-12 else _EXTENDED_GREY
     stats = _regular_session_stats(work, frame, symbol) if frame is not None else _session_stats(work, symbol)
@@ -340,6 +420,7 @@ async def render_google_finance_chart(df: pd.DataFrame, symbol: str, timeframe: 
     chart_bottom, chart_top = baseline - padding, ceiling + padding
 
     if frame is not None:
+        _draw_session_bands(ax, frame, line_color)
         _plot_session_coloured_line(ax, work.index, y, frame, line_color, chart_bottom)
     else:
         x = work.index.to_pydatetime()
@@ -350,6 +431,7 @@ async def render_google_finance_chart(df: pd.DataFrame, symbol: str, timeframe: 
     if previous is not None:
         ax.axhline(previous, linewidth=1.0, linestyle=(0, (5, 6)), color="#e4e7eb", alpha=0.85, zorder=2)
         ax.text(1.002, previous, f"Prev close\n{_fmt_value(previous, digits)}", transform=ax.get_yaxis_transform(), ha="left", va="center", fontsize=8.5, color="#d5d8de", linespacing=1.08)
+
     ax.set_ylim(chart_bottom, chart_top)
     ax.grid(axis="y", color="#34373b", linestyle="-", linewidth=0.65, alpha=0.75)
     ax.grid(axis="x", color="#34373b", linestyle="--", linewidth=0.55, alpha=0.55)
@@ -406,7 +488,18 @@ async def render_google_finance_chart(df: pd.DataFrame, symbol: str, timeframe: 
     return buf
 
 
-async def render_chart(df: pd.DataFrame, symbol: str, timeframe: str, advanced: bool = False, *, prev_close: float | None = None, price: float | None = None, currency: str | None = None, change_percent: float | None = None, quote: MarketQuote | None = None) -> io.BytesIO:
+async def render_chart(
+    df: pd.DataFrame,
+    symbol: str,
+    timeframe: str,
+    advanced: bool = False,
+    *,
+    prev_close: float | None = None,
+    price: float | None = None,
+    currency: str | None = None,
+    change_percent: float | None = None,
+    quote: MarketQuote | None = None,
+) -> io.BytesIO:
     if not advanced:
         return await render_google_finance_chart(df, symbol, timeframe, prev_close=prev_close, price=price, currency=currency, change_percent=change_percent, quote=quote)
     work = _clean_ohlcv(df)
@@ -425,15 +518,43 @@ async def render_chart(df: pd.DataFrame, symbol: str, timeframe: str, advanced: 
     if "BB_LOWER" in enriched:
         plots.append(_line(enriched["BB_LOWER"], 0, "#a78bfa", 0.9))
     if "RSI14" in enriched:
-        plots.extend([_line(enriched["RSI14"], rsi_panel, "#22d3ee", 1.05), _line(pd.Series(70.0, index=enriched.index), rsi_panel, "#ef4444", 0.65, "--"), _line(pd.Series(30.0, index=enriched.index), rsi_panel, "#22c55e", 0.65, "--"), _line(pd.Series(50.0, index=enriched.index), rsi_panel, "#64748b", 0.5, ":")])
+        plots.extend([
+            _line(enriched["RSI14"], rsi_panel, "#22d3ee", 1.05),
+            _line(pd.Series(70.0, index=enriched.index), rsi_panel, "#ef4444", 0.65, "--"),
+            _line(pd.Series(30.0, index=enriched.index), rsi_panel, "#22c55e", 0.65, "--"),
+            _line(pd.Series(50.0, index=enriched.index), rsi_panel, "#64748b", 0.5, ":"),
+        ])
     if {"MACD", "MACD_SIGNAL"}.issubset(enriched.columns):
         histogram = enriched["MACD"] - enriched["MACD_SIGNAL"]
-        plots.extend([mpf.make_addplot(histogram.clip(lower=0), type="bar", panel=macd_panel, color="#22c55e", alpha=0.55, width=0.7), mpf.make_addplot(histogram.clip(upper=0), type="bar", panel=macd_panel, color="#ef4444", alpha=0.55, width=0.7), _line(enriched["MACD"], macd_panel, "#60a5fa", 1.0), _line(enriched["MACD_SIGNAL"], macd_panel, "#f59e0b", 1.0), _line(pd.Series(0.0, index=enriched.index), macd_panel, "#64748b", 0.5, "--")])
+        plots.extend([
+            mpf.make_addplot(histogram.clip(lower=0), type="bar", panel=macd_panel, color="#22c55e", alpha=0.55, width=0.7),
+            mpf.make_addplot(histogram.clip(upper=0), type="bar", panel=macd_panel, color="#ef4444", alpha=0.55, width=0.7),
+            _line(enriched["MACD"], macd_panel, "#60a5fa", 1.0),
+            _line(enriched["MACD_SIGNAL"], macd_panel, "#f59e0b", 1.0),
+            _line(pd.Series(0.0, index=enriched.index), macd_panel, "#64748b", 0.5, "--"),
+        ])
     ratios = [6]
     if has_volume:
         ratios.append(1.8)
     ratios.extend([2, 2])
-    fig, _ = mpf.plot(enriched, type="candle", style=_CHART_STYLE, addplot=plots or None, volume=has_volume, volume_panel=volume_panel if has_volume else 0, panel_ratios=ratios, figsize=(14.0, 9.8), title=f"{symbol.upper()}  •  {timeframe}  •  Advanced", ylabel="Price", ylabel_lower="Volume" if has_volume else "", xrotation=0, datetime_format="%d %b\n%H:%M", tight_layout=True, returnfig=True, warn_too_much_data=10000)
+    fig, _ = mpf.plot(
+        enriched,
+        type="candle",
+        style=_CHART_STYLE,
+        addplot=plots or None,
+        volume=has_volume,
+        volume_panel=volume_panel if has_volume else 0,
+        panel_ratios=ratios,
+        figsize=(14.0, 9.8),
+        title=f"{symbol.upper()}  •  {timeframe}  •  Advanced",
+        ylabel="Price",
+        ylabel_lower="Volume" if has_volume else "",
+        xrotation=0,
+        datetime_format="%d %b\n%H:%M",
+        tight_layout=True,
+        returnfig=True,
+        warn_too_much_data=10000,
+    )
     fig.set_dpi(_ADVANCED_DPI)
     fig.suptitle(f"{symbol.upper()}  •  {timeframe}  •  Advanced", x=0.055, y=0.985, ha="left", fontsize=15, fontweight="bold", color="#f8fafc")
     fig.subplots_adjust(top=0.94, left=0.05, right=0.96, bottom=0.07, hspace=0.08)
