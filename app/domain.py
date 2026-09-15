@@ -48,6 +48,8 @@ class MarketQuote:
     eps: float | None = None
     pre_market_price: float | None = None
     post_market_price: float | None = None
+    corrected_previous_close: float | None = None
+    corrected_for_trading_date: str | None = None
 
     def __post_init__(self) -> None:
         for field_name in (
@@ -60,6 +62,7 @@ class MarketQuote:
             "year_low",
             "pre_market_price",
             "post_market_price",
+            "corrected_previous_close",
         ):
             setattr(self, field_name, _decimal_price(getattr(self, field_name)))
 
