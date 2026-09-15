@@ -3,8 +3,8 @@ from __future__ import annotations
 from functools import wraps
 
 
-def install(scale: float = 1.28) -> None:
-    """Increase chart typography without changing the chart's visual design."""
+def install(scale: float = 1.28, x_axis_scale: float = 1.22) -> None:
+    """Increase chart typography, with extra emphasis on time-axis labels."""
     from matplotlib.axes import Axes
     from matplotlib.figure import Figure
     from app import charts
@@ -35,7 +35,9 @@ def install(scale: float = 1.28) -> None:
     def axes_tick_params(self, *args, **kwargs):
         labelsize = kwargs.get("labelsize")
         if isinstance(labelsize, (int, float)):
-            kwargs["labelsize"] = labelsize * scale
+            axis = kwargs.get("axis", "both")
+            factor = scale * (x_axis_scale if axis == "x" else 1.0)
+            kwargs["labelsize"] = labelsize * factor
         return original_axes_tick_params(self, *args, **kwargs)
 
     @wraps(original_figure_text)
