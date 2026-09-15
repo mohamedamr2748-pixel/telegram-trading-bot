@@ -12,6 +12,7 @@ _SYMBOL_ALIASES = {
     "SPX": "^GSPC",
     "S&P500": "^GSPC",
     "S&P500INDEX": "^GSPC",
+    "NASDAQ100": "^NDX",
 }
 
 
