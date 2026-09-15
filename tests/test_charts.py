@@ -5,7 +5,7 @@ import pytest
 
 from app import charts
 from app.chart_reference_style import configure_observed_bounds
-from app.chart_sessions import build_frame
+from app.chart_sessions import SessionKind, build_frame, classify_timestamp
 
 
 def _series(index, values):
@@ -50,6 +50,51 @@ def test_reference_axis_uses_observed_bounds_and_adaptive_utc_ticks():
     assert left == pytest.approx(mdates.date2num(idx[0].to_pydatetime()))
     assert right == pytest.approx(mdates.date2num(idx[-1].to_pydatetime()))
     assert isinstance(ax.xaxis.get_major_locator(), mdates.AutoDateLocator)
+    plt.close(fig)
+
+
+def test_session_line_colours_extended_hours_gray_regular_hours_red_or_green():
+    idx = pd.date_range("2026-09-11 13:00", "2026-09-11 20:30", freq="15min", tz="UTC")
+    frame = build_frame("NFE", idx[-1], "stock", observed_index=idx)
+    assert frame is not None
+
+    fig, ax = plt.subplots()
+    charts._plot_session_coloured_line(
+        ax,
+        idx,
+        [100 + i * 0.1 for i in range(len(idx))],
+        frame,
+        charts._REGULAR_RED,
+        99.0,
+    )
+
+    line_colours = {line.get_color().lower() for line in ax.lines}
+    assert charts._EXTENDED_GREY.lower() in line_colours
+    assert charts._REGULAR_RED.lower() in line_colours
+
+    assert classify_timestamp(pd.Timestamp("2026-09-11 13:15", tz="UTC"), frame.trading_date) is SessionKind.PREMARKET
+    assert classify_timestamp(pd.Timestamp("2026-09-11 13:30", tz="UTC"), frame.trading_date) is SessionKind.REGULAR
+    assert classify_timestamp(pd.Timestamp("2026-09-11 20:00", tz="UTC"), frame.trading_date) is SessionKind.AFTERMARKET
+    plt.close(fig)
+
+
+def test_session_line_colours_regular_green_for_positive_period():
+    idx = pd.date_range("2026-09-11 13:00", "2026-09-11 20:30", freq="15min", tz="UTC")
+    frame = build_frame("NFE", idx[-1], "stock", observed_index=idx)
+    assert frame is not None
+
+    fig, ax = plt.subplots()
+    charts._plot_session_coloured_line(
+        ax,
+        idx,
+        [100 + i * 0.1 for i in range(len(idx))],
+        frame,
+        charts._REGULAR_GREEN,
+        99.0,
+    )
+    line_colours = {line.get_color().lower() for line in ax.lines}
+    assert charts._EXTENDED_GREY.lower() in line_colours
+    assert charts._REGULAR_GREEN.lower() in line_colours
     plt.close(fig)
 
 
