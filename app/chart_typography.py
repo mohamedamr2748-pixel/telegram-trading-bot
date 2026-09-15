@@ -19,56 +19,54 @@ def install(scale: float = 1.28, x_axis_scale: float = 1.22) -> None:
 
     @wraps(original_axes_text)
     def axes_text(self, x, y, s, *args, **kwargs):
-        # The previous-close annotation is rendered as two lines by the chart.
-        # Matplotlib centres both lines around the reference price, which makes
-        # "Prev close" sit directly on top of the numeric value at small sizes.
-        # Render the label and value as two separately positioned lines instead.
+        # The chart creates the previous-close annotation as:
+        # "Prev close\n<value>". Replace that with a clean single-line
+        # annotation, keeping the label regular and the value bold.
         if isinstance(s, str) and s.startswith("Prev close\n"):
             value_text = s.split("\n", 1)[1]
             try:
-                low, high = self.get_ylim()
-                span = abs(float(high) - float(low))
-                offset = max(span * 0.018, 0.01)
-            except Exception:
-                offset = 0.01
-            text_kwargs = dict(kwargs)
-            text_kwargs["ha"] = "right"
-            text_kwargs["va"] = "center"
-            text_kwargs["color"] = kwargs.get("color", "#d5d8de")
-            text_kwargs["transform"] = kwargs.get("transform", self.get_yaxis_transform())
-            text_kwargs["x"] = None
-            text_kwargs["y"] = None
+                value_text = f"{float(value_text.replace(',', '')):,.2f}"
+            except (TypeError, ValueError):
+                pass
 
-            if "fontsize" in text_kwargs:
+            base_kwargs = dict(kwargs)
+            base_kwargs["va"] = "center"
+            base_kwargs["transform"] = kwargs.get("transform", self.get_yaxis_transform())
+
+            if "fontsize" in base_kwargs:
                 try:
-                    text_kwargs["fontsize"] = float(text_kwargs["fontsize"]) * scale
+                    base_kwargs["fontsize"] = float(base_kwargs["fontsize"]) * scale
                 except (TypeError, ValueError):
                     pass
-            elif "size" in text_kwargs:
+            elif "size" in base_kwargs:
                 try:
-                    text_kwargs["size"] = float(text_kwargs["size"]) * scale
+                    base_kwargs["size"] = float(base_kwargs["size"]) * scale
                 except (TypeError, ValueError):
                     pass
 
-            label_kwargs = dict(text_kwargs)
-            value_kwargs = dict(text_kwargs)
-            label_kwargs.pop("x", None)
-            label_kwargs.pop("y", None)
-            value_kwargs.pop("x", None)
-            value_kwargs.pop("y", None)
+            label_kwargs = dict(base_kwargs)
+            label_kwargs["ha"] = "right"
+            label_kwargs["color"] = kwargs.get("color", "#d5d8de")
 
+            value_kwargs = dict(base_kwargs)
+            value_kwargs["ha"] = "right"
+            value_kwargs["fontweight"] = "bold"
+            value_kwargs["color"] = kwargs.get("color", "#f8fafc")
+
+            # Keep both pieces on the same horizontal line and inside the
+            # plotting area so neither collides with the right-side axis ticks.
             original_axes_text(
                 self,
-                0.995,
-                y + offset,
-                "Prev close",
+                0.930,
+                y,
+                "Prev. close",
                 *args,
                 **label_kwargs,
             )
             original_axes_text(
                 self,
                 0.995,
-                y - offset,
+                y,
                 value_text,
                 *args,
                 **value_kwargs,
