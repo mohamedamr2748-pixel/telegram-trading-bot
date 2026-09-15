@@ -38,6 +38,11 @@ from app import charts as charts_module
 from app.chart_reference_style import configure_observed_bounds
 charts_module._configure_us_equity_x_axis = configure_observed_bounds
 
+# Indexes use index-specific metrics (volume/session/day change) rather than
+# stock-only fields such as market cap that may not exist for an index quote.
+from app.index_stats import install as install_index_stats
+install_index_stats(charts_module)
+
 # Replace only the legacy /market handler with the upgraded interactive
 # dashboard; all other bot handlers remain intact.
 from app.market_dashboard import install as install_market_dashboard
