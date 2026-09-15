@@ -4,19 +4,20 @@ from typing import Any
 
 
 class DecimalPrice(float):
-    """Float value that never renders using scientific notation."""
+    """Float value that renders as tidy decimal market-price text."""
 
     def __str__(self) -> str:
         return _format_decimal_price(self)
 
     def __format__(self, format_spec: str) -> str:
-        if "e" in format_spec.lower() or "g" in format_spec.lower():
+        if not format_spec or "e" in format_spec.lower() or "g" in format_spec.lower():
             return _format_decimal_price(self)
         return super().__format__(format_spec)
 
 
 def _format_decimal_price(value: float) -> str:
-    text = f"{float(value):.8f}"
+    number = float(value)
+    text = f"{number:,.8f}"
     return text.rstrip("0").rstrip(".") or "0"
 
 
