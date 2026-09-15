@@ -14,10 +14,12 @@ from app.alerts import evaluate_alerts
 from app.db import init_db, session_factory
 from app.market import MarketService
 from app.market_enrichment import install_market_enrichment
+from app.symbol_aliases import install_symbol_aliases
 from config import settings
 
 # Install before importing app.bot: bot.py creates its MarketService at import time.
 install_market_enrichment()
+install_symbol_aliases()
 
 # Keep the invalid-ticker guide portable and use the dedicated implementation.
 from app.ticker_guide import ticker_format_image
