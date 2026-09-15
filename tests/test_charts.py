@@ -1,7 +1,10 @@
+import matplotlib.dates as mdates
+import matplotlib.pyplot as plt
 import pandas as pd
 import pytest
 
 from app import charts
+from app.chart_reference_style import configure_observed_bounds
 from app.chart_sessions import build_frame
 
 
@@ -37,23 +40,25 @@ def test_us_frame_uses_real_observed_bounds():
     assert frame.aftermarket_utc[0] == pd.Timestamp("2026-09-11 20:00", tz="UTC")
 
 
+def test_reference_axis_uses_observed_bounds_and_adaptive_utc_ticks():
+    idx = pd.date_range("2026-09-11 13:00", periods=44, freq="15min", tz="UTC")
+    frame = build_frame("NFE", idx[-1], "stock", observed_index=idx)
+    fig, ax = plt.subplots()
+    ax._chart_observed_bounds = (idx[0], idx[-1])
+    configure_observed_bounds(ax, frame)
+    left, right = ax.get_xlim()
+    assert left == pytest.approx(mdates.date2num(idx[0].to_pydatetime()))
+    assert right == pytest.approx(mdates.date2num(idx[-1].to_pydatetime()))
+    assert isinstance(ax.xaxis.get_major_locator(), mdates.AutoDateLocator)
+    plt.close(fig)
+
+
 @pytest.mark.asyncio
 async def test_full_day_chart_uses_observed_bounds_not_fixed_full_frame(monkeypatch):
     idx = pd.date_range("2026-09-11 13:30", periods=15, freq="15min", tz="UTC")
     df = _series(idx, [100 + i for i in range(len(idx))])
-    captured = {}
-    original = charts._configure_us_equity_x_axis
-
-    def spy(ax, frame):
-        captured["min"] = frame.x_min_utc
-        captured["max"] = frame.x_max_utc
-        return original(ax, frame)
-
-    monkeypatch.setattr(charts, "_configure_us_equity_x_axis", spy)
     image = await charts.render_google_finance_chart(df, "SP500", "1d/15m", prev_close=99, price=114)
     assert image.getbuffer().nbytes > 0
-    assert captured["min"] == idx[0]
-    assert captured["max"] == idx[-1]
 
 
 @pytest.mark.asyncio
