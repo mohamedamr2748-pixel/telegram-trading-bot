@@ -27,10 +27,16 @@ from app.ticker_guide import ticker_format_image
 import app.bot as bot_module
 bot_module.ticker_format_image = ticker_format_image
 
-# The chart renderer now owns UTC display labels, period performance and the
-# US-equity full-day frame. Only typography remains an orthogonal font scaler.
+# The chart renderer owns UTC display labels, period performance and the
+# US-equity session classification. Typography remains orthogonal.
 from app.chart_typography import install as install_chart_typography
 install_chart_typography()
+
+# Match the reference chart: use the real observation domain for the x-axis
+# while retaining centralized US session colouring and no synthetic prices.
+from app import charts as charts_module
+from app.chart_reference_style import configure_observed_bounds
+charts_module._configure_us_equity_x_axis = configure_observed_bounds
 
 # Replace only the legacy /market handler with the upgraded interactive
 # dashboard; all other bot handlers remain intact.
