@@ -45,8 +45,9 @@ def test_session_classification():
     d = frame.trading_date
     assert cs.classify_timestamp(pd.Timestamp("2026-09-11 12:00", tz="UTC"), d) is cs.SessionKind.PREMARKET
     assert cs.classify_timestamp(pd.Timestamp("2026-09-11 14:30", tz="UTC"), d) is cs.SessionKind.REGULAR
-    assert cs.classify_timestamp(pd.Timestamp("2026-09-11 20:30", tz="UTC"), d) is cs.SessionKind.REGULAR
-    assert cs.classify_timestamp(pd.Timestamp("2026-09-11 21:00", tz="UTC"), d) is cs.SessionKind.AFTERMARKET
+    assert cs.classify_timestamp(pd.Timestamp("2026-09-11 19:45", tz="UTC"), d) is cs.SessionKind.REGULAR
+    assert cs.classify_timestamp(pd.Timestamp("2026-09-11 20:00", tz="UTC"), d) is cs.SessionKind.AFTERMARKET
+    assert cs.classify_timestamp(pd.Timestamp("2026-09-11 23:00", tz="UTC"), d) is cs.SessionKind.AFTERMARKET
     assert cs.classify_timestamp(pd.Timestamp("2026-09-12 00:30", tz="UTC"), d) is cs.SessionKind.CLOSED
 
 
@@ -65,4 +66,4 @@ def test_regular_session_mask_uses_centralized_classifier():
         "2026-09-11 20:00Z",
         "2026-09-11 23:00Z",
     ], utc=True)
-    assert charts._regular_session_mask(idx).tolist() == [False, True, True, True, False]
+    assert charts._regular_session_mask(idx).tolist() == [False, True, True, False, False]
