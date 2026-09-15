@@ -1,0 +1,295 @@
+name: Apply chart hardening
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: .
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - name: Apply provider parity fix and chart hardening
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              if old not in text:
+                  raise SystemExit(f'Pattern not found in {path}')
+              p.write_text(text.replace(old, new, 1))
+
+          # YFinanceProvider must recognise the inverse crypto pairs already
+          # supported by the application (e.g. USD-BTC).
+          replace_once(
+              'app/market.py',
+              '        if s in {"BTCUSD", "ETHUSD", "SOLUSD", "XRPUSD", "BNBUSD"}:\n            return "crypto"\n',
+              '        if s in {"BTCUSD", "ETHUSD", "SOLUSD", "XRPUSD", "BNBUSD", "DOGEUSD", "ADAUSD", "USDBTC", "USDETH", "USDSOL", "USDXRP", "USDBNB", "USDDOGE", "USDADA"}:\n            return "crypto"\n',
+          )
+
+          # Centralised session classification: precious metals and ordinary
+          # stock tickers follow the provider's existing classification model.
+          replace_once(
+              'app/chart_sessions.py',
+              '    if s.endswith("=F"):\n        return AssetKind.COMMODITY\n',
+              '    if s.endswith("=F"):\n        return AssetKind.COMMODITY\n    if compact in {"XAUUSD", "XAGUSD"}:\n        return AssetKind.COMMODITY\n',
+          )
+          replace_once(
+              'app/chart_sessions.py',
+              '    if quote_asset_class:\n        qc = quote_asset_class.lower()\n        if qc == "crypto":\n            return AssetKind.CRYPTO\n        if qc == "forex":\n            return AssetKind.FOREX\n        if qc in {"commodity", "metal", "futures"}:\n            return AssetKind.COMMODITY\n        if qc in {"stock", "index", "equity"}:\n            return AssetKind.US_EQUITY\n    return AssetKind.OTHER\n',
+              '    if quote_asset_class:\n        qc = quote_asset_class.lower()\n        if qc == "crypto":\n            return AssetKind.CRYPTO\n        if qc == "forex":\n            return AssetKind.FOREX\n        if qc in {"commodity", "metal", "futures"}:\n            return AssetKind.COMMODITY\n        if qc in {"stock", "index", "equity"}:\n            return AssetKind.US_EQUITY\n    if s and s.replace(".", "").isalnum() and "=" not in s and ":" not in s and "/" not in s:\n        return AssetKind.US_EQUITY\n    return AssetKind.OTHER\n',
+          )
+
+          # Cache corrected previous close on MarketQuote.
+          replace_once(
+              'app/domain.py',
+              '    post_market_price: float | None = None\n\n    def __post_init__',
+              '    post_market_price: float | None = None\n    corrected_previous_close: float | None = None\n    corrected_for_trading_date: str | None = None\n\n    def __post_init__',
+          )
+
+          charts = Path('app/charts.py')
+          text = charts.read_text()
+
+          text = re.sub(
+              r'def _pre_market\(quote: MarketQuote \| None\) -> str:\n.*?\n\n\ndef _asset_stats_rows',
+              'def _asset_stats_rows',
+              text,
+              count=1,
+              flags=re.S,
+          )
+
+          old_prev = '''async def _correct_yfinance_previous_close(symbol: str, quote: MarketQuote | None, timeframe: str) -> float | None:\n    if quote is None or quote.source != "yfinance" or not timeframe.upper().startswith("1D"):\n        return quote.previous_close if quote else None\n    try:\n        from app.market import MarketService\n        daily = await MarketService().get_history(symbol, period="5d", interval="1d")\n        if "Close" not in daily.columns:\n            return quote.previous_close\n        daily = daily.copy()\n        daily["Close"] = pd.to_numeric(daily["Close"], errors="coerce")\n        daily = daily.dropna(subset=["Close"]).sort_index()\n        if len(daily) >= 2:\n            return float(daily["Close"].iloc[-2])\n    except Exception:\n        pass\n    return quote.previous_close\n'''
+          new_prev = '''async def _correct_yfinance_previous_close(\n    symbol: str,\n    quote: MarketQuote | None,\n    timeframe: str,\n    trading_date_iso: str | None,\n) -> float | None:\n    if quote is None or quote.source != "yfinance" or not timeframe.upper().startswith("1D"):\n        return quote.previous_close if quote else None\n    if quote.corrected_previous_close is not None and quote.corrected_for_trading_date == trading_date_iso:\n        return quote.corrected_previous_close\n    try:\n        from app.market import MarketService\n        daily = await MarketService().get_history(symbol, period="5d", interval="1d")\n        if "Close" not in daily.columns:\n            return quote.previous_close\n        daily = daily.copy()\n        daily["Close"] = pd.to_numeric(daily["Close"], errors="coerce")\n        daily = daily.dropna(subset=["Close"]).sort_index()\n        if len(daily) >= 2:\n            corrected = float(daily["Close"].iloc[-2])\n            quote.corrected_previous_close = corrected\n            quote.corrected_for_trading_date = trading_date_iso\n            return corrected\n    except Exception:\n        pass\n    return quote.previous_close\n'''
+          replace_once('app/charts.py', old_prev, new_prev)
+
+          old_cfg = '''def _configure_us_equity_x_axis(ax, frame: TradingFrame) -> None:\n    ax.set_xlim(frame.x_min_utc.to_pydatetime(), frame.x_max_utc.to_pydatetime())\n    ax.xaxis.set_major_locator(mdates.HourLocator(byhour=range(0, 24, 2), tz=UTC))\n    ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M", tz=UTC))\n    ax.xaxis.get_offset_text().set_visible(False)\n'''
+          new_cfg = '''def _draw_session_boundaries(ax, frame: TradingFrame) -> None:\n    if frame.regular_utc is None:\n        return\n    for boundary in frame.regular_utc:\n        ax.axvline(boundary, color="#fbbf24", linewidth=0.7, linestyle=(0, (2, 6)), alpha=0.32, zorder=1)\n\n\ndef _configure_us_equity_x_axis(ax, frame: TradingFrame) -> None:\n    x_min = mdates.date2num(frame.x_min_utc.to_pydatetime())\n    x_max = mdates.date2num(frame.x_max_utc.to_pydatetime())\n    pad = (x_max - x_min) * 0.03\n    ax.set_xlim(x_min - pad, x_max + pad)\n    ax.xaxis.set_major_locator(mdates.HourLocator(byhour=range(0, 24, 2), tz=UTC))\n    ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M", tz=UTC))\n    ax.xaxis.get_offset_text().set_visible(False)\n'''
+          replace_once('app/charts.py', old_cfg, new_cfg)
+
+          old_setup = '''    if quote is not None:\n        price = quote.price if price is None else price\n        currency = currency or ("USD" if quote.asset_class in {"stock", "index", "commodity", "metal", "forex", "market"} else None)\n        corrected_previous = await _correct_yfinance_previous_close(symbol, quote, timeframe)\n        if prev_close is None or quote.source == "yfinance":\n            prev_close = corrected_previous\n        if prev_close and prev_close > 0 and price is not None:\n            change_percent = (price / prev_close - 1.0) * 100.0\n        elif change_percent is None:\n            change_percent = quote.change_percent\n\n    is_1d = timeframe.upper().startswith("1D")\n    last_price = float(price) if price is not None else float(work["Close"].iloc[-1])\n    previous = float(prev_close) if prev_close and prev_close > 0 else None\n    if is_1d:\n        if change_percent is None and previous:\n            change_percent = (last_price / previous - 1.0) * 100.0\n    else:\n        first = float(work["Close"].iloc[0])\n        change_percent = (last_price / first - 1.0) * 100.0 if first else None\n        previous = first\n\n    frame = build_frame(symbol, work.index[-1], quote.asset_class if quote else None) if is_1d else None\n'''
+          new_setup = '''    if quote is not None:\n        price = quote.price if price is None else price\n        currency = currency or ("USD" if quote.asset_class in {"stock", "index", "commodity", "metal", "forex", "market"} else None)\n        if prev_close is None and quote.previous_close is not None:\n            prev_close = quote.previous_close\n        if prev_close and prev_close > 0 and price is not None:\n            change_percent = (price / prev_close - 1.0) * 100.0\n        elif change_percent is None:\n            change_percent = quote.change_percent\n\n    is_1d = timeframe.upper().startswith("1D")\n    frame = build_frame(symbol, work.index[-1], quote.asset_class if quote else None) if is_1d else None\n    trading_date_iso = frame.trading_date.isoformat() if frame and frame.trading_date else None\n\n    if quote is not None and quote.source == "yfinance" and is_1d:\n        corrected_previous = await _correct_yfinance_previous_close(symbol, quote, timeframe, trading_date_iso)\n        if corrected_previous is not None:\n            prev_close = corrected_previous\n            if price is not None and prev_close > 0:\n                change_percent = (price / prev_close - 1.0) * 100.0\n\n    last_price = float(price) if price is not None else float(work["Close"].iloc[-1])\n    previous = float(prev_close) if prev_close and prev_close > 0 else None\n    first_close = float(work["Close"].iloc[0])\n    if is_1d:\n        if change_percent is None and previous:\n            change_percent = (last_price / previous - 1.0) * 100.0\n        elif change_percent is None and first_close > 0 and len(work) >= 2:\n            change_percent = (last_price / first_close - 1.0) * 100.0\n    else:\n        if first_close > 0:\n            change_percent = (last_price / first_close - 1.0) * 100.0\n        previous = first_close\n'''
+          replace_once('app/charts.py', old_setup, new_setup)
+
+          marker = '''    if frame is not None:\n        _plot_session_coloured_line(ax, work.index, y, frame, line_color, chart_bottom)\n'''
+          replace_once('app/charts.py', marker, marker + '        _draw_session_boundaries(ax, frame)\n')
+
+          # Reuse caller-fetched quote in the bot and dashboard chart paths.
+          replace_once(
+              'app/bot.py',
+              '        df = await market.get_history(symbol, period=period, interval=interval)\n        image = await render_chart(df, symbol, f"{period}/{interval}", advanced=advanced)\n',
+              '        df = await market.get_history(symbol, period=period, interval=interval)\n        try:\n            quote = await market.get_quote(symbol)\n        except Exception:\n            quote = None\n        image = await render_chart(df, symbol, f"{period}/{interval}", advanced=advanced, quote=quote)\n',
+          )
+          replace_once(
+              'app/bot.py',
+              '        df = await market.get_history(symbol, "1mo", "1d")\n        image = await render_chart(df, symbol, "1mo/1d")\n',
+              '        df = await market.get_history(symbol, "1mo", "1d")\n        try:\n            quote = await market.get_quote(symbol)\n        except Exception:\n            quote = None\n        image = await render_chart(df, symbol, "1mo/1d", quote=quote)\n',
+          )
+          replace_once(
+              'app/market_dashboard.py',
+              '        market = MarketService()\n        df = await market.get_history(symbol, period="1d", interval="15m")\n        image = await render_chart(df, symbol, "1d/15m")\n',
+              '        market = MarketService()\n        df = await market.get_history(symbol, period="1d", interval="15m")\n        try:\n            quote = await market.get_quote(symbol)\n        except Exception:\n            quote = None\n        image = await render_chart(df, symbol, "1d/15m", quote=quote)\n',
+          )
+          PY
+
+      - name: Update tests
+        shell: bash
+        run: |
+          cat > tests/test_chart_sessions.py <<'PYTEST'
+          import pandas as pd
+          from app import chart_sessions as cs
+          from app import charts
+          from app.market import YFinanceProvider
+
+          def test_common_asset_classes():
+              assert cs.classify_asset('AAPL') is cs.AssetKind.US_EQUITY
+              assert cs.classify_asset('^GSPC') is cs.AssetKind.US_EQUITY
+              assert cs.classify_asset('SP500') is cs.AssetKind.US_EQUITY
+              assert cs.classify_asset('BTC-USD') is cs.AssetKind.CRYPTO
+              assert cs.classify_asset('USDBTC') is cs.AssetKind.CRYPTO
+              assert cs.classify_asset('EURUSD=X') is cs.AssetKind.FOREX
+              assert cs.classify_asset('EURUSD') is cs.AssetKind.FOREX
+              assert cs.classify_asset('GC=F') is cs.AssetKind.COMMODITY
+              assert cs.classify_asset('XAUUSD') is cs.AssetKind.COMMODITY
+
+          def test_provider_parity():
+              for symbol in ['AAPL','^GSPC','SP500','GC=F','XAUUSD','BTC-USD','BTCUSD','USDBTC','EURUSD=X','EURUSD','USDJPY']:
+                  provider = YFinanceProvider._classify(symbol)
+                  ours = cs.classify_asset(symbol)
+                  if provider == 'crypto':
+                      assert ours is cs.AssetKind.CRYPTO
+                  elif provider == 'forex':
+                      assert ours is cs.AssetKind.FOREX
+                  elif provider in {'commodity','metal'}:
+                      assert ours is cs.AssetKind.COMMODITY
+                  elif provider in {'stock','index'}:
+                      assert ours is cs.AssetKind.US_EQUITY
+
+          def test_dst_safe_frames():
+              winter = cs.build_us_equity_frame(pd.Timestamp('2026-01-12 12:00', tz='UTC'))
+              assert winter.x_min_utc == pd.Timestamp('2026-01-12 09:00', tz='UTC')
+              assert winter.regular_utc[0] == pd.Timestamp('2026-01-12 14:30', tz='UTC')
+              assert winter.regular_utc[1] == pd.Timestamp('2026-01-12 21:00', tz='UTC')
+              assert winter.x_max_utc == pd.Timestamp('2026-01-13 01:00', tz='UTC')
+              summer = cs.build_us_equity_frame(pd.Timestamp('2026-07-13 12:00', tz='UTC'))
+              assert summer.x_min_utc == pd.Timestamp('2026-07-13 08:00', tz='UTC')
+              assert summer.regular_utc[0] == pd.Timestamp('2026-07-13 13:30', tz='UTC')
+              assert summer.regular_utc[1] == pd.Timestamp('2026-07-13 20:00', tz='UTC')
+              assert summer.x_max_utc == pd.Timestamp('2026-07-14 00:00', tz='UTC')
+
+          def test_weekend_falls_back():
+              frame = cs.build_us_equity_frame(pd.Timestamp('2026-09-12 15:00', tz='UTC'))
+              assert str(frame.trading_date) == '2026-09-11'
+
+          def test_session_classifier():
+              d = pd.Timestamp('2026-09-11 18:00', tz='UTC').date()
+              assert cs.classify_timestamp(pd.Timestamp('2026-09-11 12:00', tz='UTC'), d) is cs.SessionKind.PREMARKET
+              assert cs.classify_timestamp(pd.Timestamp('2026-09-11 14:30', tz='UTC'), d) is cs.SessionKind.REGULAR
+              assert cs.classify_timestamp(pd.Timestamp('2026-09-11 20:00', tz='UTC'), d) is cs.SessionKind.AFTERMARKET
+
+          def test_regular_mask_uses_centralized_classifier():
+              idx = pd.to_datetime(['2026-09-11 12:00Z','2026-09-11 13:30Z','2026-09-11 19:45Z','2026-09-11 20:00Z'], utc=True)
+              assert charts._regular_session_mask(idx).tolist() == [False, True, True, False]
+
+          def test_non_us_assets_have_no_us_frame():
+              when = pd.Timestamp('2026-09-11 18:00', tz='UTC')
+              assert cs.build_frame('BTC-USD', when) is None
+              assert cs.build_frame('EURUSD=X', when) is None
+              assert cs.build_frame('GC=F', when) is None
+          PYTEST
+
+          cat > tests/test_charts.py <<'PYTEST'
+          import pandas as pd
+          import pytest
+          import matplotlib
+          matplotlib.use('Agg')
+          import matplotlib.dates as mdates
+          import matplotlib.pyplot as plt
+          from app import charts
+          from app import chart_sessions as cs
+          from app.market import MarketService
+
+          def _series(index, values):
+              return pd.DataFrame({'Close': values}, index=index)
+
+          def test_cleaning_drops_nat():
+              idx = pd.Index(['2026-09-11 15:00+00:00','not-a-date','2026-09-11 15:15+00:00'])
+              work = charts._prepare_price_series(_series(idx, [100,101,102]))
+              assert len(work) == 2
+              assert work.index.isna().sum() == 0
+
+          def test_subcent_formatting():
+              for value in (1e-2,1e-4,1e-6,1e-8):
+                  assert 'e' not in charts._fmt_value(value).lower()
+              assert charts._fmt_value(0.001234) == '0.001234'
+              assert charts._fmt_value(12.5) == '12.50'
+
+          def test_axis_has_small_pad():
+              frame = cs.build_us_equity_frame(pd.Timestamp('2026-09-11 18:00', tz='UTC'))
+              fig, ax = plt.subplots()
+              try:
+                  charts._configure_us_equity_x_axis(ax, frame)
+                  xmin, xmax = ax.get_xlim()
+                  expected_min = mdates.date2num(frame.x_min_utc.to_pydatetime())
+                  expected_max = mdates.date2num(frame.x_max_utc.to_pydatetime())
+                  assert xmin < expected_min
+                  assert xmax > expected_max
+              finally:
+                  plt.close(fig)
+
+          @pytest.mark.asyncio
+          async def test_full_day_chart_renders():
+              idx = pd.date_range('2026-09-11 14:30', periods=4, freq='15min', tz='UTC')
+              buf = await charts.render_google_finance_chart(_series(idx,[100,101,102,103]), 'AAPL', '1d/15m', prev_close=99, price=103)
+              assert buf.getbuffer().nbytes > 1000
+
+          @pytest.mark.asyncio
+          async def test_crypto_does_not_use_us_frame(monkeypatch):
+              idx = pd.date_range('2026-09-11 00:00', periods=6, freq='4h', tz='UTC')
+              called = False
+              original = charts._configure_us_equity_x_axis
+              def spy(ax, frame):
+                  nonlocal called
+                  called = True
+                  return original(ax, frame)
+              monkeypatch.setattr(charts, '_configure_us_equity_x_axis', spy)
+              buf = await charts.render_google_finance_chart(_series(idx,[50000,50100,50200,50150,50000,49900]), 'BTC-USD', '1d/4h', prev_close=50200, price=49900)
+              assert buf.getbuffer().nbytes > 1000
+              assert called is False
+
+          @pytest.mark.asyncio
+          async def test_single_point_renders():
+              idx = pd.DatetimeIndex([pd.Timestamp('2026-09-11 15:00', tz='UTC')])
+              buf = await charts.render_google_finance_chart(_series(idx,[100]), 'AAPL', '1d/15m', prev_close=99, price=100)
+              assert buf.getbuffer().nbytes > 1000
+
+          def test_empty_raises():
+              df = pd.DataFrame({'Close': []}, index=pd.DatetimeIndex([], tz='UTC'))
+              with pytest.raises(ValueError):
+                  charts._prepare_price_series(df)
+
+          @pytest.mark.asyncio
+          async def test_no_quote_direction_fallback(monkeypatch):
+              idx = pd.date_range('2026-09-11 14:30', periods=4, freq='15min', tz='UTC')
+              async def fail_quote(self, symbol):
+                  raise RuntimeError('provider unavailable')
+              monkeypatch.setattr(MarketService, 'get_quote', fail_quote)
+              buf = await charts.render_google_finance_chart(_series(idx,[100,101,102,103]), 'AAPL', '1d/15m')
+              assert buf.getbuffer().nbytes > 1000
+          PYTEST
+
+          cat > tests/test_chart_cache.py <<'PYTEST'
+          import pandas as pd
+          import pytest
+          from app.domain import MarketQuote
+          from app import charts
+
+          @pytest.mark.asyncio
+          async def test_corrected_previous_close_is_cached(monkeypatch):
+              quote = MarketQuote(symbol='AAPL', asset_class='stock', price=103, previous_close=99, source='yfinance')
+              calls = 0
+
+              class FakeMarket:
+                  async def get_history(self, symbol, period='1mo', interval='1d'):
+                      nonlocal calls
+                      calls += 1
+                      return pd.DataFrame({'Close': [98.0, 99.0]}, index=pd.to_datetime(['2026-09-14', '2026-09-15']))
+
+              monkeypatch.setattr(charts, 'MarketService', FakeMarket, raising=False)
+              # The implementation imports MarketService inside the helper, so patch the module class directly.
+              import app.market
+              monkeypatch.setattr(app.market, 'MarketService', FakeMarket)
+              first = await charts._correct_yfinance_previous_close('AAPL', quote, '1D/15m', '2026-09-15')
+              second = await charts._correct_yfinance_previous_close('AAPL', quote, '1D/15m', '2026-09-15')
+              assert first == 98.0
+              assert second == 98.0
+              assert calls == 1
+          PYTEST
+
+      - name: Compile and test
+        run: |
+          python -m compileall -q .
+          pytest -q
+
+      - name: Commit final code
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm -f .github/workflows/apply_chart_hardening.yml
+          git add app tests
+          git commit -m 'Harden chart rendering and session handling'
+          git push
