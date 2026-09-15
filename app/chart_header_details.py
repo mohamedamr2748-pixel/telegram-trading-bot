@@ -41,21 +41,6 @@ def _fmt_price(value: object, digits: int = 2) -> str:
     return f"{number:,.{digits}f}"
 
 
-def _fmt_volume(value: object) -> str:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return "n/a"
-    absolute = abs(number)
-    if absolute >= 1_000_000_000:
-        return f"{number / 1_000_000_000:.2f}B"
-    if absolute >= 1_000_000:
-        return f"{number / 1_000_000:.2f}M"
-    if absolute >= 1_000:
-        return f"{number / 1_000:.0f}K"
-    return f"{number:.0f}"
-
-
 def _session_label(quote: Any = None) -> str:
     status = str(getattr(quote, "market_status", "") or "").upper().replace("_", " ")
     if "PRE" in status:
@@ -69,12 +54,12 @@ def _session_label(quote: Any = None) -> str:
     return "UNKNOWN"
 
 
-def _metadata_lines(
+def _metadata_values(
     frame: pd.DataFrame,
     symbol: str,
     timeframe: str,
     quote: Any = None,
-) -> tuple[str, str, str, str]:
+) -> dict[str, str]:
     work = frame.copy()
     work.index = pd.to_datetime(work.index, utc=True)
     work = work.sort_index()
@@ -82,30 +67,23 @@ def _metadata_lines(
     opening = work["Open"].iloc[0] if "Open" in work.columns and not work.empty else None
     high = work["High"].max() if "High" in work.columns and not work.empty else None
     low = work["Low"].min() if "Low" in work.columns and not work.empty else None
-    volume = work["Volume"].sum() if "Volume" in work.columns and not work.empty else None
 
     previous = getattr(quote, "previous_close", None)
     year_high = getattr(quote, "year_high", None)
     year_low = getattr(quote, "year_low", None)
     interval = timeframe.split("/", 1)[1] if "/" in timeframe else timeframe
-    asset = _asset_label(symbol.upper(), quote)
-    session = _session_label(quote)
 
-    line_one = f"{asset}  •  {interval.upper()} INTERVALS  •  UTC TIMEZONE"
-    line_two = (
-        f"OPEN  {_fmt_price(opening)}     "
-        f"HIGH  {_fmt_price(high)}     "
-        f"LOW  {_fmt_price(low)}     "
-        f"VOLUME  {_fmt_volume(volume)}"
-    )
-    line_three = (
-        f"PREV CLOSE  {_fmt_price(previous)}     "
-        f"DAY RANGE  {_fmt_price(low)} — {_fmt_price(high)}"
-    )
-    line_four = f"SESSION  {session}"
-    if year_high is not None and year_low is not None:
-        line_four += f"     52W  {_fmt_price(year_low)} — {_fmt_price(year_high)}"
-    return line_one, line_two, line_three, line_four
+    return {
+        "asset": _asset_label(symbol, quote),
+        "interval": interval.upper(),
+        "open": _fmt_price(opening),
+        "high": _fmt_price(high),
+        "low": _fmt_price(low),
+        "previous": _fmt_price(previous),
+        "day_range": f"{_fmt_price(low)} — {_fmt_price(high)}",
+        "session": _session_label(quote),
+        "year_range": f"{_fmt_price(year_low)} — {_fmt_price(year_high)}" if year_low is not None and year_high is not None else "n/a",
+    }
 
 
 async def _render_with_header(original_render, *args, **kwargs) -> io.BytesIO:
@@ -121,12 +99,12 @@ async def _render_with_header(original_render, *args, **kwargs) -> io.BytesIO:
     if not isinstance(df, pd.DataFrame) or df.empty:
         return rendered
 
-    line_one, line_two, line_three, line_four = _metadata_lines(df, symbol, timeframe, quote)
+    values = _metadata_values(df, symbol, timeframe, quote)
 
     width, height = base.size
-    # More vertical room plus a much larger fixed font keeps the metadata
-    # readable after Telegram scales the image on a phone.
-    pad_top = max(230, int(height * 0.225))
+    # Reserve a dedicated header band so the metadata never collides with the
+    # chart title or selector below it.
+    pad_top = max(225, int(height * 0.22))
     canvas = Image.new("RGB", (width, height + pad_top), "#202124")
     canvas.paste(base, (0, pad_top))
     draw = ImageDraw.Draw(canvas)
@@ -135,28 +113,54 @@ async def _render_with_header(original_render, *args, **kwargs) -> io.BytesIO:
     bright = "#f0f2f5"
     divider = "#34373b"
 
-    x = int(width * 0.035)
-    # Deliberately use a substantially larger fixed size so the four metadata
-    # rows remain readable on a phone after Telegram's image scaling.
-    meta_size = max(48, int(width / 32))
-    small = _font(meta_size, bold=False)
-    values = _font(meta_size, bold=True)
-    value_size = max(50, int(width / 30))
-    values_large = _font(value_size, bold=True)
+    x0 = int(width * 0.035)
+    x1 = int(width * 0.385)
+    x2 = int(width * 0.690)
 
-    y_one = int(pad_top * 0.07)
-    y_two = int(pad_top * 0.34)
-    y_three = int(pad_top * 0.57)
-    y_four = int(pad_top * 0.78)
+    y1 = int(pad_top * 0.07)
+    y2 = int(pad_top * 0.30)
+    y3 = int(pad_top * 0.51)
+    y4 = int(pad_top * 0.72)
 
-    draw.text((x, y_one), line_one, font=small, fill=muted)
-    draw.text((x, y_two), line_two, font=values_large, fill=bright)
-    draw.text((x, y_three), line_three, font=values, fill=bright)
-    draw.text((x, y_four), line_four, font=values, fill=bright)
+    heading = _font(max(38, int(width / 38)), bold=False)
+    label = _font(max(31, int(width / 47)), bold=True)
+    value = _font(max(35, int(width / 42)), bold=True)
 
-    divider_y = int(pad_top * 0.97)
+    # 1. Context row.
+    draw.text(
+        (x0, y1),
+        f"{values['asset']}  •  {values['interval']} INTERVALS  •  UTC TIMEZONE",
+        font=heading,
+        fill=muted,
+    )
+
+    # 2. OHLC row. Keep each field independent so long prices cannot collide.
+    draw.text((x0, y2), "OPEN", font=label, fill=bright)
+    draw.text((x0 + int(width * 0.125), y2), values["open"], font=value, fill=bright)
+
+    draw.text((x1, y2), "HIGH", font=label, fill=bright)
+    draw.text((x1 + int(width * 0.125), y2), values["high"], font=value, fill=bright)
+
+    draw.text((x2, y2), "LOW", font=label, fill=bright)
+    draw.text((x2 + int(width * 0.075), y2), values["low"], font=value, fill=bright)
+
+    # 3. Previous close / day range row.
+    draw.text((x0, y3), "PREV CLOSE", font=label, fill=bright)
+    draw.text((x0 + int(width * 0.175), y3), values["previous"], font=value, fill=bright)
+
+    draw.text((x1, y3), "DAY RANGE", font=label, fill=bright)
+    draw.text((x1 + int(width * 0.155), y3), values["day_range"], font=value, fill=bright)
+
+    # 4. Session / 52-week range row.
+    draw.text((x0, y4), "SESSION", font=label, fill=bright)
+    draw.text((x0 + int(width * 0.125), y4), values["session"], font=value, fill=bright)
+
+    draw.text((x1, y4), "52W", font=label, fill=bright)
+    draw.text((x1 + int(width * 0.060), y4), values["year_range"], font=value, fill=bright)
+
+    divider_y = int(pad_top * 0.93)
     draw.line(
-        (x, divider_y, int(width * 0.93), divider_y),
+        (x0, divider_y, int(width * 0.93), divider_y),
         fill=divider,
         width=max(1, int(width / 1800)),
     )
