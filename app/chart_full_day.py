@@ -1,18 +1,15 @@
 from __future__ import annotations
 
-from datetime import datetime, time
+from datetime import time
 
 import pandas as pd
 
+_REGULAR_OPEN = time(9, 30)
+_REGULAR_CLOSE = time(16, 0)
+
 
 def install() -> None:
-    """Keep 1D intraday charts framed across the full US trading session.
-
-    The data remains exactly as returned by the market provider. When the
-    market is still open, the future part of the session is simply empty
-    space; it is not fabricated. Once extended-hours data exists beyond the
-    regular close, the existing chart naturally expands to include it.
-    """
+    """Frame live 1D/15m US charts across the complete regular session."""
     from app import charts
 
     if getattr(charts, "_chart_full_day_installed", False):
@@ -21,9 +18,12 @@ def install() -> None:
     original_configure = charts._configure_full_day_axis
 
     def configure_full_day_axis(ax, index, x_positions):
+        # First let the existing UTC axis implementation configure fonts and
+        # basic labels. We then replace only the x-range/ticks when the
+        # regular session is still in progress.
         original_configure(ax, index, x_positions)
 
-        if len(index) <= 1 or len(x_positions) <= 1:
+        if len(index) < 2 or len(x_positions) < 2:
             return
 
         try:
@@ -33,49 +33,50 @@ def install() -> None:
             else:
                 timestamps = timestamps.tz_convert("UTC")
 
-            # Only extend a chart that is visibly a short intraday window.
-            # Completed days such as a full regular + extended session are
-            # left untouched.
-            current_right = float(max(x_positions))
-            first_utc = timestamps[0]
-            first_ny = first_utc.tz_convert("America/New_York")
-            close_ny = first_ny.replace(hour=16, minute=0, second=0, microsecond=0)
-            close_utc = close_ny.tz_convert("UTC")
-
+            ny = timestamps.tz_convert("America/New_York")
             interval = timestamps.to_series().diff().dropna().median()
             if pd.isna(interval) or interval <= pd.Timedelta(0):
                 return
 
-            regular_end_position = (close_utc - first_utc) / interval
-            regular_end_position = float(regular_end_position)
-
-            # Do not alter charts whose data already reaches/passes regular
-            # close. This preserves the established full-day NFE behaviour.
-            if regular_end_position <= current_right + 1.0:
+            # This layer is used by the 1D full-day renderer for US stocks and
+            # indices. Only extend when the current data is still inside the
+            # regular session. Never add synthetic price points.
+            if ny[0].time() > _REGULAR_OPEN or ny[-1].time() >= _REGULAR_CLOSE:
+                return
+            if not all(_REGULAR_OPEN <= stamp.time() < _REGULAR_CLOSE for stamp in ny):
                 return
 
-            # Give the plot the complete regular-session frame. No future
-            # price points are added; only the x-axis is extended.
-            left = -0.5
-            right = regular_end_position + 0.5
-            ax.set_xlim(left, right)
+            # The compressed x-axis starts at the first real observation.
+            # For the normal US 15-minute session this is 09:30 NY, giving
+            # 27 slots through 16:00 NY. Calculate the endpoint from the real
+            # interval so this also remains correct if the provider changes
+            # the intraday interval.
+            session_open = ny[0].replace(hour=9, minute=30, second=0, microsecond=0)
+            session_close = ny[0].replace(hour=16, minute=0, second=0, microsecond=0)
+            if ny[0] != session_open:
+                return
 
-            # Build clean hourly labels across the full regular session.
-            tick_times = []
+            regular_end_position = float((session_close - ny[0]) / interval)
+            current_right = float(max(x_positions))
+            if regular_end_position <= current_right:
+                return
+
+            ax.set_xlim(-0.5, regular_end_position + 0.5)
+
+            # Hourly UTC labels across the complete regular US session.
             tick_positions = []
-            cursor = first_utc
-            while cursor <= close_utc:
-                position = float((cursor - first_utc) / interval)
-                tick_times.append(cursor)
-                tick_positions.append(position)
+            tick_labels = []
+            cursor = ny[0]
+            while cursor <= session_close:
+                tick_positions.append(float((cursor - ny[0]) / interval))
+                tick_labels.append(cursor.tz_convert("UTC").strftime("%H:%M"))
                 cursor += pd.Timedelta(hours=1)
 
-            if tick_times:
-                ax.set_xticks(tick_positions)
-                ax.set_xticklabels([t.tz_convert("UTC").strftime("%H:%M") for t in tick_times])
-                ax.xaxis.get_offset_text().set_visible(False)
+            ax.set_xticks(tick_positions)
+            ax.set_xticklabels(tick_labels)
+            ax.xaxis.get_offset_text().set_visible(False)
         except Exception:
-            # Chart rendering must never fail because axis framing is optional.
+            # Framing is optional and must never break chart rendering.
             return
 
     charts._configure_full_day_axis = configure_full_day_axis
