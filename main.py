@@ -48,6 +48,11 @@ install_chart_utc()
 from app.chart_period_performance import install as install_chart_period_performance
 install_chart_period_performance()
 
+# Replace only the legacy /market handler with the upgraded interactive
+# dashboard; all other bot handlers remain intact.
+from app.market_dashboard import install as install_market_dashboard
+install_market_dashboard(bot_module)
+
 from app.bot import build_dispatcher
 
 logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
