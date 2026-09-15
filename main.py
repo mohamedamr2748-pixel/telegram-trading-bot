@@ -53,6 +53,12 @@ install_chart_period_performance()
 from app.chart_typography import install as install_chart_typography
 install_chart_typography()
 
+# Add the compact metadata block above the chart with the selected market
+# statistics: interval/UTC context, OHLC/volume, previous close/day range,
+# session status, and 52-week range when available.
+from app.chart_header_details import install as install_chart_header_details
+install_chart_header_details()
+
 # Replace only the legacy /market handler with the upgraded interactive
 # dashboard; all other bot handlers remain intact.
 from app.market_dashboard import install as install_market_dashboard
