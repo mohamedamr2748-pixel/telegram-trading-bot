@@ -1,0 +1,35 @@
+name: Fix chart hardening workflow
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.event.head_commit.message == 'Fix chart hardening workflow parity'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch workflow and remove helper
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('.github/workflows/apply_chart_hardening.yml')
+          text = p.read_text()
+          old = '''          replace_once(\n              'app/market.py',\n              '        if s in {"BTCUSD", "ETHUSD", "SOLUSD", "XRPUSD", "BNBUSD"}:\\n            return "crypto"\\n',\n              '        if s in {"BTCUSD", "ETHUSD", "SOLUSD", "XRPUSD", "BNBUSD", "DOGEUSD", "ADAUSD", "USDBTC", "USDETH", "USDSOL", "USDXRP", "USDBNB", "USDDOGE", "USDADA"}:\\n            return "crypto"\\n',\n          )\n'''
+          new = '''          replace_once(\n              'app/market.py',\n              '        if s in {"BTCUSD", "ETHUSD", "SOLUSD", "XRPUSD", "BNBUSD"}:\\n            return "crypto"\\n',\n              '        if s in {"BTCUSD", "ETHUSD", "SOLUSD", "XRPUSD", "BNBUSD", "DOGEUSD", "ADAUSD", "USDBTC", "USDETH", "USDSOL", "USDXRP", "USDBNB", "USDDOGE", "USDADA"}:\\n            return "crypto"\\n',\n          )\n          replace_once(\n              'app/market.py',\n              '        if s in {"EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD", "USDEUR", "USDGBP", "JPYUSD", "USDAUD", "AUUSD", "CADUSD", "CHFUSD", "USDNZD"}:\\n',\n              '        if s.endswith("=X") or s in {"EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD", "USDEUR", "USDGBP", "JPYUSD", "USDAUD", "AUUSD", "CADUSD", "CHFUSD", "USDNZD"}:\\n',\n          )\n'''
+          if old not in text:
+              raise SystemExit('target block not found in apply_chart_hardening.yml')
+          p.write_text(text.replace(old, new, 1))
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm -f .github/workflows/fix_hardening_workflow.yml
+          git add .github/workflows/apply_chart_hardening.yml
+          git commit -m 'Fix chart hardening workflow'
+          git push
