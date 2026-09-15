@@ -32,12 +32,12 @@ def _asset_label(symbol: str, quote: Any = None) -> str:
     return "EQUITY"
 
 
-def _fmt_price(value: object) -> str:
+def _fmt_price(value: object, digits: int = 2) -> str:
     try:
         number = float(value)
     except (TypeError, ValueError):
         return "n/a"
-    return f"{number:,.2f}"
+    return f"{number:,.{digits}f}"
 
 
 def _fmt_volume(value: object) -> str:
@@ -55,25 +55,51 @@ def _fmt_volume(value: object) -> str:
     return f"{number:.0f}"
 
 
-def _metadata_line(frame: pd.DataFrame, symbol: str, timeframe: str, quote: Any = None) -> tuple[str, str]:
-    frame = frame.copy()
-    frame.index = pd.to_datetime(frame.index, utc=True)
-    frame = frame.sort_index()
-    opening = frame["Open"].iloc[0] if "Open" in frame.columns and not frame.empty else None
-    high = frame["High"].max() if "High" in frame.columns and not frame.empty else None
-    low = frame["Low"].min() if "Low" in frame.columns and not frame.empty else None
-    volume = frame["Volume"].sum() if "Volume" in frame.columns and not frame.empty else None
+def _session_label(quote: Any = None) -> str:
+    status = str(getattr(quote, "market_status", "") or "").upper().replace("_", " ")
+    if "PRE" in status:
+        return "PRE-MARKET"
+    if "POST" in status or "AFTER" in status:
+        return "AFTER-HOURS"
+    if "REGULAR" in status or status == "OPEN":
+        return "REGULAR SESSION"
+    if "CLOSED" in status:
+        return "CLOSED"
+    return "UNKNOWN"
 
+
+def _metadata_lines(frame: pd.DataFrame, symbol: str, timeframe: str, quote: Any = None) -> tuple[str, str, str]:
+    work = frame.copy()
+    work.index = pd.to_datetime(work.index, utc=True)
+    work = work.sort_index()
+
+    opening = work["Open"].iloc[0] if "Open" in work.columns and not work.empty else None
+    high = work["High"].max() if "High" in work.columns and not work.empty else None
+    low = work["Low"].min() if "Low" in work.columns and not work.empty else None
+    volume = work["Volume"].sum() if "Volume" in work.columns and not work.empty else None
+
+    previous = getattr(quote, "previous_close", None)
+    year_high = getattr(quote, "year_high", None)
+    year_low = getattr(quote, "year_low", None)
     interval = timeframe.split("/", 1)[1] if "/" in timeframe else timeframe
     asset = _asset_label(symbol.upper(), quote)
-    line_one = f"{asset}   •   {interval.upper()} INTERVALS   •   UTC TIMEZONE"
+    session = _session_label(quote)
+
+    line_one = f"{asset}  •  {interval.upper()} INTERVALS  •  UTC TIMEZONE"
     line_two = (
-        f"OPEN {_fmt_price(opening)}    "
-        f"HIGH {_fmt_price(high)}    "
-        f"LOW {_fmt_price(low)}    "
-        f"VOLUME {_fmt_volume(volume)}"
+        f"OPEN  {_fmt_price(opening)}     "
+        f"HIGH  {_fmt_price(high)}     "
+        f"LOW  {_fmt_price(low)}     "
+        f"VOLUME  {_fmt_volume(volume)}"
     )
-    return line_one, line_two
+    line_three = (
+        f"PREV CLOSE  {_fmt_price(previous)}     "
+        f"DAY RANGE  {_fmt_price(low)} — {_fmt_price(high)}     "
+        f"SESSION  {session}"
+    )
+    if year_high is not None and year_low is not None:
+        line_three += f"     52W  {_fmt_price(year_low)} — {_fmt_price(year_high)}"
+    return line_one, line_two, line_three
 
 
 async def _render_with_header(original_render, *args, **kwargs) -> io.BytesIO:
@@ -89,10 +115,10 @@ async def _render_with_header(original_render, *args, **kwargs) -> io.BytesIO:
     if not isinstance(df, pd.DataFrame) or df.empty:
         return rendered
 
-    line_one, line_two = _metadata_line(df, symbol, timeframe, quote)
+    line_one, line_two, line_three = _metadata_lines(df, symbol, timeframe, quote)
 
     width, height = base.size
-    pad_top = max(46, int(height * 0.055))
+    pad_top = max(104, int(height * 0.105))
     canvas = Image.new("RGB", (width, height + pad_top), "#202124")
     canvas.paste(base, (0, pad_top))
     draw = ImageDraw.Draw(canvas)
@@ -100,16 +126,26 @@ async def _render_with_header(original_render, *args, **kwargs) -> io.BytesIO:
     muted = "#9aa0a6"
     bright = "#d7dbe2"
     divider = "#34373b"
-    small = _font(max(15, int(width / 150)), bold=False)
-    values = _font(max(15, int(width / 155)), bold=True)
 
+    # Keep the metadata clearly readable on Telegram without competing with
+    # the main ticker/price already rendered by the chart itself.
+    small = _font(max(18, int(width / 135)), bold=False)
+    values = _font(max(18, int(width / 135)), bold=True)
     x = int(width * 0.035)
-    y_one = int(pad_top * 0.18)
-    y_two = int(pad_top * 0.53)
+    y_one = int(pad_top * 0.10)
+    y_two = int(pad_top * 0.40)
+    y_three = int(pad_top * 0.70)
+
     draw.text((x, y_one), line_one, font=small, fill=muted)
     draw.text((x, y_two), line_two, font=values, fill=bright)
+    draw.text((x, y_three), line_three, font=small, fill=bright)
+
     divider_y = int(pad_top * 0.96)
-    draw.line((x, divider_y, int(width * 0.93), divider_y), fill=divider, width=max(1, int(width / 1800)))
+    draw.line(
+        (x, divider_y, int(width * 0.93), divider_y),
+        fill=divider,
+        width=max(1, int(width / 1800)),
+    )
 
     output = io.BytesIO()
     canvas.save(output, format="PNG", optimize=False, compress_level=1)
