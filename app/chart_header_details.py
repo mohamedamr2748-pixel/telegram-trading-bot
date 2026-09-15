@@ -123,36 +123,35 @@ async def _render_with_header(original_render, *args, **kwargs) -> io.BytesIO:
     line_one, line_two, line_three, line_four = _metadata_lines(df, symbol, timeframe, quote)
 
     width, height = base.size
-    # Keep the metadata readable after Telegram scales a 1536px-wide image.
-    pad_top = max(156, int(height * 0.16))
+    # More vertical room plus a much larger fixed font keeps the metadata
+    # readable after Telegram scales the image on a phone.
+    pad_top = max(230, int(height * 0.225))
     canvas = Image.new("RGB", (width, height + pad_top), "#202124")
     canvas.paste(base, (0, pad_top))
     draw = ImageDraw.Draw(canvas)
 
-    muted = "#9aa0a6"
-    bright = "#e8eaed"
+    muted = "#b2b8c0"
+    bright = "#f0f2f5"
     divider = "#34373b"
 
     x = int(width * 0.035)
-    # Deliberately use a substantially larger fixed size so the four metadata
-    # rows remain readable on a phone after Telegram's image scaling.
-    meta_size = max(29, int(width / 52))
+    meta_size = max(48, int(width / 32))
     small = _font(meta_size, bold=False)
     values = _font(meta_size, bold=True)
-    value_size = max(30, int(width / 50))
+    value_size = max(50, int(width / 30))
     values_large = _font(value_size, bold=True)
 
-    y_one = int(pad_top * 0.06)
-    y_two = int(pad_top * 0.31)
-    y_three = int(pad_top * 0.55)
-    y_four = int(pad_top * 0.77)
+    y_one = int(pad_top * 0.07)
+    y_two = int(pad_top * 0.34)
+    y_three = int(pad_top * 0.57)
+    y_four = int(pad_top * 0.78)
 
     draw.text((x, y_one), line_one, font=small, fill=muted)
     draw.text((x, y_two), line_two, font=values_large, fill=bright)
     draw.text((x, y_three), line_three, font=values, fill=bright)
     draw.text((x, y_four), line_four, font=values, fill=bright)
 
-    divider_y = int(pad_top * 0.96)
+    divider_y = int(pad_top * 0.97)
     draw.line(
         (x, divider_y, int(width * 0.93), divider_y),
         fill=divider,
