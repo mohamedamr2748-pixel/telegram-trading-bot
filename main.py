@@ -17,7 +17,8 @@ from app.market_enrichment import install_market_enrichment
 from app.symbol_aliases import install_symbol_aliases
 from config import settings
 
-# Install before importing app.bot: bot.py creates its MarketService at import time.
+# Install market/symbol enrichment before importing app.bot because bot.py
+# constructs its MarketService at import time.
 install_market_enrichment()
 install_symbol_aliases()
 
@@ -26,40 +27,10 @@ from app.ticker_guide import ticker_format_image
 import app.bot as bot_module
 bot_module.ticker_format_image = ticker_format_image
 
-# Make the timezone explicit on every chart caption without changing any
-# non-chart photo captions.
-_original_answer_photo = bot_module.Message.answer_photo
-
-
-async def _chart_answer_photo_with_explicit_utc(self, *args, **kwargs):
-    caption = kwargs.get("caption")
-    if caption and caption.startswith("📈 ") and " • UTC" in caption:
-        kwargs["caption"] = caption.replace(" • UTC", " • UTC Timezone", 1)
-    return await _original_answer_photo(self, *args, **kwargs)
-
-
-bot_module.Message.answer_photo = _chart_answer_photo_with_explicit_utc
-
-# All user-facing chart time labels are UTC. Session classification inside
-# app.charts still uses New York time for U.S. market hours.
-from app.chart_utc import install as install_chart_utc
-install_chart_utc()
-
-# For ranges longer than 1D, colour the chart and headline percentage by the
-# selected chart-period return rather than by today's daily move.
-from app.chart_period_performance import install as install_chart_period_performance
-install_chart_period_performance()
-
-# Increase chart text sizes for readability while preserving the existing
-# Yahoo-style line/area chart design.
+# The chart renderer now owns UTC display labels, period performance and the
+# US-equity full-day frame. Only typography remains an orthogonal font scaler.
 from app.chart_typography import install as install_chart_typography
 install_chart_typography()
-
-# Keep 1D intraday charts framed across the complete regular US session. This
-# extends only the x-axis when the session is still in progress; it never
-# invents future price data.
-from app.chart_full_day import install as install_chart_full_day
-install_chart_full_day()
 
 # Replace only the legacy /market handler with the upgraded interactive
 # dashboard; all other bot handlers remain intact.
