@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import io
-from datetime import time
 
 import matplotlib
 matplotlib.use("Agg")
@@ -11,12 +10,16 @@ import mplfinance as mpf
 import pandas as pd
 from matplotlib.patches import FancyBboxPatch
 
+from app.chart_sessions import AssetKind, SessionKind, TradingFrame, UTC, build_frame, classify_timestamp
 from app.domain import MarketQuote
 from app.indicators import add_advanced_indicators
 
 _STANDARD_FIGSIZE = (16.0, 8.0)
 _STANDARD_DPI = 240
 _ADVANCED_DPI = 220
+_EXTENDED_GREY = "#9aa0a6"
+_REGULAR_GREEN = "#55e982"
+_REGULAR_RED = "#f26b63"
 
 _CHART_STYLE = mpf.make_mpf_style(
     base_mpf_style="nightclouds",
@@ -28,10 +31,6 @@ _CHART_STYLE = mpf.make_mpf_style(
     y_on_right=True,
     rc={"axes.labelsize": 10, "axes.titlesize": 15, "xtick.labelsize": 9, "ytick.labelsize": 9, "font.size": 10, "figure.dpi": _ADVANCED_DPI, "savefig.dpi": _ADVANCED_DPI},
 )
-
-_REGULAR_OPEN = time(9, 30)
-_REGULAR_CLOSE = time(16, 0)
-_EXTENDED_GREY = "#9aa0a6"
 
 
 def _clean_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
@@ -53,42 +52,66 @@ def _clean_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
     return work
 
 
+def _prepare_price_series(df: pd.DataFrame) -> pd.DataFrame:
+    """Clean real price observations without creating synthetic observations."""
+    if "Close" not in df.columns:
+        raise ValueError("Chart requires a Close/price series")
+    work = df.copy()
+    parsed = pd.to_datetime(work.index, utc=True, errors="coerce")
+    work.index = parsed
+    work = work[~work.index.isna()]
+    work["Close"] = pd.to_numeric(work["Close"], errors="coerce")
+    work = work.dropna(subset=["Close"])
+    work = work[~work.index.duplicated(keep="last")].sort_index()
+    if work.empty:
+        raise ValueError("No valid price points available for chart")
+    if len(work) > 2500:
+        work = work.iloc[-2500:]
+    return work
+
+
 def _line(series: pd.Series, panel: int, color: str, width: float = 1.0, linestyle: str = "-"):
     return mpf.make_addplot(series, panel=panel, color=color, width=width, linestyle=linestyle, secondary_y=False)
 
 
 def _display_index(index: pd.DatetimeIndex, symbol: str) -> pd.DatetimeIndex:
-    upper = symbol.upper()
-    if upper.endswith("-USD") or upper in {"BTCUSD", "ETHUSD", "SOLUSD", "XRPUSD", "BNBUSD"}:
-        return index
-    try:
-        return index.tz_localize("UTC").tz_convert("America/New_York").tz_localize(None)
-    except TypeError:
-        return index
+    """Return the chart display index in UTC; kept for compatibility."""
+    work = pd.DatetimeIndex(index)
+    if work.tz is None:
+        return work.tz_localize(UTC)
+    return work.tz_convert(UTC)
 
 
 def _fmt_value(value: object, digits: int = 2) -> str:
+    """Readable decimal formatting that never falls back to scientific notation."""
     if value is None or pd.isna(value):
         return "n/a"
     try:
         number = float(value)
     except (TypeError, ValueError):
         return str(value)
-    if abs(number) >= 1_000_000_000_000:
+    magnitude = abs(number)
+    if magnitude >= 1_000_000_000_000:
         return f"{number / 1_000_000_000_000:.2f}T"
-    if abs(number) >= 1_000_000_000:
+    if magnitude >= 1_000_000_000:
         return f"{number / 1_000_000_000:.2f}B"
-    if abs(number) >= 1_000_000:
+    if magnitude >= 1_000_000:
         return f"{number / 1_000_000:.2f}M"
-    if abs(number) >= 1_000:
+    if magnitude >= 1_000:
         return f"{number:,.0f}"
-    return f"{number:.{digits}f}"
+    if digits != 2:
+        return f"{number:.{digits}f}"
+    if magnitude >= 1:
+        return f"{number:,.2f}"
+    if magnitude >= 0.01:
+        return f"{number:.4f}"
+    if magnitude >= 0.0001:
+        return f"{number:.6f}"
+    return f"{number:.8f}"
 
 
 def _fmt_percent(value: float | None) -> str:
-    if value is None:
-        return "n/a"
-    return f"{value:+.2f}%"
+    return "n/a" if value is None else f"{value:+.2f}%"
 
 
 def _fmt_meta(value: float | None, percent: bool = False) -> str:
@@ -102,8 +125,6 @@ def _price_digits(symbol: str, quote: MarketQuote | None) -> int:
     normalized = symbol.upper().replace("/", "").replace("-", "")
     if asset == "forex" or normalized in {"EURUSD", "USDEUR", "GBPUSD", "USDGBP", "USDJPY", "JPYUSD", "AUDUSD", "USDAUD", "AUUSD", "USDCAD", "CADUSD", "USDCHF", "CHFUSD", "NZDUSD", "USDNZD"}:
         return 5 if "JPY" not in normalized else 3
-    if asset == "crypto":
-        return 2
     return 2
 
 
@@ -120,7 +141,6 @@ def _period_performance(series: pd.Series, timeframe: str, daily_change: float |
 def _session_stats(df: pd.DataFrame, symbol: str) -> dict[str, str]:
     work = df.copy()
     work.index = pd.to_datetime(work.index, utc=True)
-    work.index = _display_index(work.index, symbol)
     work = work.sort_index()
     intraday = len(work) > 1 and (work.index[-1] - work.index[-2]) <= pd.Timedelta(hours=2)
     if intraday:
@@ -128,14 +148,27 @@ def _session_stats(df: pd.DataFrame, symbol: str) -> dict[str, str]:
         session = work[work.index.date == latest_date]
         if session.empty:
             session = work.iloc[-1:]
-        opening = session["Open"].iloc[0]
-        high = session["High"].max()
-        low = session["Low"].min()
-        volume = session["Volume"].sum() if "Volume" in session.columns else None
     else:
-        row = work.iloc[-1]
-        opening, high, low = row.get("Open"), row.get("High"), row.get("Low")
-        volume = row.get("Volume") if "Volume" in work.columns else None
+        session = work.iloc[-1:]
+    row = session.iloc[0]
+    opening = session["Open"].iloc[0] if "Open" in session.columns else row["Close"]
+    high = session["High"].max() if "High" in session.columns else session["Close"].max()
+    low = session["Low"].min() if "Low" in session.columns else session["Close"].min()
+    volume = session["Volume"].sum() if "Volume" in session.columns else None
+    return {"Open": _fmt_value(opening), "High": _fmt_value(high), "Low": _fmt_value(low), "Volume": _fmt_value(volume, 0)}
+
+
+def _regular_session_stats(df: pd.DataFrame, frame: TradingFrame, symbol: str) -> dict[str, str]:
+    if frame.regular_utc is None:
+        return _session_stats(df, symbol)
+    start, end = frame.regular_utc
+    regular = df[(df.index >= start) & (df.index < end)]
+    if regular.empty:
+        return _session_stats(df, symbol)
+    opening = regular["Open"].iloc[0] if "Open" in regular.columns else regular["Close"].iloc[0]
+    high = regular["High"].max() if "High" in regular.columns else regular["Close"].max()
+    low = regular["Low"].min() if "Low" in regular.columns else regular["Close"].min()
+    volume = regular["Volume"].sum() if "Volume" in regular.columns else None
     return {"Open": _fmt_value(opening), "High": _fmt_value(high), "Low": _fmt_value(low), "Volume": _fmt_value(volume, 0)}
 
 
@@ -165,7 +198,8 @@ def _asset_stats_rows(symbol: str, quote: MarketQuote | None, stats: dict[str, s
     asset = (quote.asset_class if quote else "stock").lower()
     normalized = symbol.upper().replace("/", "").replace("-", "")
     digits = _price_digits(symbol, quote)
-    if asset == "forex" or normalized in {"EURUSD", "USDEUR", "GBPUSD", "USDGBP", "USDJPY", "JPYUSD", "AUDUSD", "USDAUD", "AUUSD", "USDCAD", "CADUSD", "USDCHF", "CHFUSD", "NZDUSD", "USDNZD"}:
+    forex = asset == "forex" or normalized in {"EURUSD", "USDEUR", "GBPUSD", "USDGBP", "USDJPY", "JPYUSD", "AUDUSD", "USDAUD", "AUUSD", "USDCAD", "CADUSD", "USDCHF", "CHFUSD", "NZDUSD", "USDNZD"}
+    if forex:
         return [
             [("Open", _fmt_value(stats["Open"], digits)), ("Previous", _fmt_value(quote.previous_close, digits) if quote else "n/a"), ("Day change", _fmt_percent(change_percent))],
             [("High", _fmt_value(stats["High"], digits)), ("52-wk high", _fmt_value(quote.year_high, digits) if quote else "n/a"), ("52-wk low", _fmt_value(quote.year_low, digits) if quote else "n/a")],
@@ -173,9 +207,9 @@ def _asset_stats_rows(symbol: str, quote: MarketQuote | None, stats: dict[str, s
         ]
     if asset == "crypto":
         return [
-            [("Open", _fmt_value(stats["Open"])), ("Previous", _fmt_value(quote.previous_close) if quote else "n/a"), ("24h volume", _fmt_value(quote.volume, 0) if quote else stats["Volume"])],
-            [("High", _fmt_value(stats["High"])), ("52-wk high", _fmt_value(quote.year_high) if quote else "n/a"), ("52-wk low", _fmt_value(quote.year_low) if quote else "n/a")],
-            [("Low", _fmt_value(stats["Low"])), ("Session", _status_text(quote)), ("Updated", quote.timestamp.strftime("%H:%M UTC") if quote else "n/a")],
+            [("Open", stats["Open"]), ("Previous", _fmt_value(quote.previous_close) if quote else "n/a"), ("24h volume", _fmt_value(quote.volume, 0) if quote else stats["Volume"])],
+            [("High", stats["High"]), ("52-wk high", _fmt_value(quote.year_high) if quote else "n/a"), ("52-wk low", _fmt_value(quote.year_low) if quote else "n/a")],
+            [("Low", stats["Low"]), ("Session", _status_text(quote)), ("Updated", quote.timestamp.strftime("%H:%M UTC") if quote else "n/a")],
         ]
     if asset in {"metal", "commodity"}:
         return [
@@ -191,73 +225,20 @@ def _asset_stats_rows(symbol: str, quote: MarketQuote | None, stats: dict[str, s
 
 
 def _regular_session_mask(index: pd.DatetimeIndex) -> pd.Series:
+    """Compatibility helper backed by the centralized session model."""
     aware = pd.DatetimeIndex(index)
-    if getattr(aware, "tz", None) is None:
-        aware = aware.tz_localize("UTC")
-    ny = aware.tz_convert("America/New_York")
-    return pd.Series((ny.time >= _REGULAR_OPEN) & (ny.time < _REGULAR_CLOSE), index=index)
-
-
-def _compressed_intraday_positions(index: pd.DatetimeIndex) -> list[float]:
-    return [float(i) for i in range(len(index))]
+    if aware.tz is None:
+        aware = aware.tz_localize(UTC)
+    # For mixed-date data, classify each timestamp against its own ET date.
+    values = []
+    for stamp in aware:
+        et_date = stamp.tz_convert("America/New_York").date()
+        values.append(classify_timestamp(stamp, et_date) is SessionKind.REGULAR)
+    return pd.Series(values, index=index)
 
 
 def _is_full_day_us_intraday(symbol: str, quote: MarketQuote | None, timeframe: str) -> bool:
-    if not timeframe.upper().startswith("1D"):
-        return False
-    asset = (quote.asset_class if quote else "").lower()
-    normalized = symbol.strip().upper()
-    return asset in {"stock", "index"} or normalized.startswith("^")
-
-
-def _regular_session_stats(frame: pd.DataFrame, symbol: str) -> dict[str, str]:
-    work = frame.copy()
-    work.index = pd.to_datetime(work.index, utc=True)
-    ny = work.index.tz_convert("America/New_York")
-    mask = (ny.time >= _REGULAR_OPEN) & (ny.time < _REGULAR_CLOSE)
-    regular = work.loc[mask]
-    if regular.empty:
-        return _session_stats(frame, symbol)
-    volume = regular["Volume"].sum() if "Volume" in regular.columns else None
-    return {
-        "Open": _fmt_value(regular["Open"].iloc[0]),
-        "High": _fmt_value(regular["High"].max()),
-        "Low": _fmt_value(regular["Low"].min()),
-        "Volume": _fmt_value(volume, 0),
-    }
-
-
-def _plot_full_day_continuous(ax, index: pd.DatetimeIndex, y: pd.Series, regular_color: str, bottom: float) -> list[float]:
-    x = _compressed_intraday_positions(index)
-    regular_mask = _regular_session_mask(index).to_numpy(dtype=bool)
-    values = y.to_numpy(dtype=float)
-    for i in range(len(values) - 1):
-        segment_regular = regular_mask[i] and regular_mask[i + 1]
-        color = regular_color if segment_regular else _EXTENDED_GREY
-        alpha = 0.11 if segment_regular else 0.055
-        ax.plot([x[i], x[i + 1]], [values[i], values[i + 1]], linewidth=2.55, color=color, solid_capstyle="round", solid_joinstyle="round", antialiased=True, zorder=4)
-        ax.fill_between([x[i], x[i + 1]], [values[i], values[i + 1]], bottom, color=color, alpha=alpha, zorder=1, antialiased=True)
-    last_color = regular_color if regular_mask[-1] else _EXTENDED_GREY
-    ax.scatter([x[-1]], [values[-1]], s=50, color=last_color, edgecolor="#202124", linewidth=1.5, zorder=6, antialiased=True)
-    return x
-
-
-def _configure_full_day_axis(ax, index: pd.DatetimeIndex, x_positions: list[float]) -> None:
-    if len(index) <= 1:
-        ax.set_xticks(x_positions)
-        return
-    count = min(8, len(index))
-    sample = [round(i * (len(index) - 1) / (count - 1)) for i in range(count)] if count > 1 else [0]
-    sample = list(dict.fromkeys(sample))
-    ticks = [x_positions[i] for i in sample]
-    labels = [pd.Timestamp(index[i]).tz_convert("America/New_York").strftime("%H:%M") if pd.Timestamp(index[i]).tzinfo is not None else pd.Timestamp(index[i]).strftime("%H:%M") for i in sample]
-    ax.set_xticks(ticks)
-    ax.set_xticklabels(labels)
-    ax.xaxis.get_offset_text().set_visible(False)
-
-
-def _correct_previous_close_legacy(*args, **kwargs):
-    return None
+    return timeframe.upper().startswith("1D") and build_frame(symbol, pd.Timestamp.now(tz=UTC), quote.asset_class if quote else None) is not None
 
 
 async def _correct_yfinance_previous_close(symbol: str, quote: MarketQuote | None, timeframe: str) -> float | None:
@@ -284,18 +265,35 @@ def _selector_key(timeframe: str) -> str | None:
     return next((label for prefix, label in mapping if upper.startswith(prefix)), None)
 
 
+def _plot_session_coloured_line(ax, index: pd.DatetimeIndex, values, frame: TradingFrame, regular_colour: str, bottom: float) -> None:
+    if len(index) == 0 or frame.trading_date is None:
+        return
+    kinds = [classify_timestamp(ts, frame.trading_date) for ts in index]
+    numeric = pd.Series(values, index=index).to_numpy(dtype=float)
+    for i in range(len(index) - 1):
+        # Never bridge a missing-data gap. A line segment is only valid when
+        # consecutive observations are close enough to represent one interval.
+        gap = index[i + 1] - index[i]
+        if gap > pd.Timedelta(hours=2):
+            continue
+        regular = kinds[i] is SessionKind.REGULAR and kinds[i + 1] is SessionKind.REGULAR
+        colour = regular_colour if regular else _EXTENDED_GREY
+        alpha = 0.11 if regular else 0.055
+        ax.plot(index[i:i + 2], numeric[i:i + 2], linewidth=2.55, color=colour, solid_capstyle="round", solid_joinstyle="round", antialiased=True, zorder=4)
+        ax.fill_between(index[i:i + 2], numeric[i:i + 2], bottom, color=colour, alpha=alpha, zorder=1, antialiased=True)
+    last_colour = regular_colour if kinds[-1] is SessionKind.REGULAR else _EXTENDED_GREY
+    ax.scatter([index[-1]], [numeric[-1]], s=50, color=last_colour, edgecolor="#202124", linewidth=1.5, zorder=6, antialiased=True)
+
+
+def _configure_us_equity_x_axis(ax, frame: TradingFrame) -> None:
+    ax.set_xlim(frame.x_min_utc.to_pydatetime(), frame.x_max_utc.to_pydatetime())
+    ax.xaxis.set_major_locator(mdates.HourLocator(byhour=range(0, 24, 2), tz=UTC))
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M", tz=UTC))
+    ax.xaxis.get_offset_text().set_visible(False)
+
+
 async def render_google_finance_chart(df: pd.DataFrame, symbol: str, timeframe: str, prev_close: float | None = None, price: float | None = None, currency: str | None = None, change_percent: float | None = None, quote: MarketQuote | None = None) -> io.BytesIO:
-    if "Close" not in df.columns:
-        raise ValueError("Chart requires a Close/price series")
-    work = df.copy()
-    work.index = pd.to_datetime(work.index, utc=True)
-    work["Close"] = pd.to_numeric(work["Close"], errors="coerce")
-    work = work.dropna(subset=["Close"]).sort_index()
-    work = work[~work.index.duplicated(keep="last")]
-    if work.empty:
-        raise ValueError("No valid price points available for chart")
-    if len(work) > 2500:
-        work = work.iloc[-2500:]
+    work = _prepare_price_series(df)
     if quote is None and (prev_close is None or price is None or change_percent is None):
         try:
             from app.market import MarketService
@@ -308,49 +306,50 @@ async def render_google_finance_chart(df: pd.DataFrame, symbol: str, timeframe: 
         corrected_previous = await _correct_yfinance_previous_close(symbol, quote, timeframe)
         if prev_close is None or quote.source == "yfinance":
             prev_close = corrected_previous
-        if prev_close and prev_close > 0:
-            change_percent = ((price if price is not None else quote.price) / prev_close - 1.0) * 100.0
+        if prev_close and prev_close > 0 and price is not None:
+            change_percent = (price / prev_close - 1.0) * 100.0
         elif change_percent is None:
             change_percent = quote.change_percent
-    display_index = _display_index(work.index, symbol)
-    series = pd.Series(work["Close"].to_numpy(dtype=float), index=display_index)
-    last_price = price if price is not None else float(series.iloc[-1])
-    previous = prev_close if prev_close and prev_close > 0 else None
-    if change_percent is None and previous:
-        change_percent = (last_price / previous - 1.0) * 100.0
-    period_perf = _period_performance(series, timeframe, change_percent)
-    stats = _regular_session_stats(work, symbol) if _is_full_day_us_intraday(symbol, quote, timeframe) else _session_stats(work, symbol)
+
+    is_1d = timeframe.upper().startswith("1D")
+    last_price = float(price) if price is not None else float(work["Close"].iloc[-1])
+    previous = float(prev_close) if prev_close and prev_close > 0 else None
+    if is_1d:
+        if change_percent is None and previous:
+            change_percent = (last_price / previous - 1.0) * 100.0
+    else:
+        first = float(work["Close"].iloc[0])
+        change_percent = (last_price / first - 1.0) * 100.0 if first else None
+        previous = first
+
+    frame = build_frame(symbol, work.index[-1], quote.asset_class if quote else None) if is_1d else None
+    period_perf = _period_performance(work["Close"], timeframe, change_percent)
+    line_color = _REGULAR_GREEN if period_perf is not None and period_perf > 1e-12 else _REGULAR_RED if period_perf is not None and period_perf < -1e-12 else _EXTENDED_GREY
+    stats = _regular_session_stats(work, frame, symbol) if frame is not None else _session_stats(work, symbol)
     digits = _price_digits(symbol, quote)
     currency_text = f" {currency}" if currency else ""
 
     fig = plt.figure(figsize=_STANDARD_FIGSIZE, dpi=_STANDARD_DPI, facecolor="#202124")
     ax = fig.add_axes([0.035, 0.30, 0.865, 0.56])
     ax.set_facecolor("#202124")
-    x = series.index.to_pydatetime()
-    y = series.to_numpy(dtype=float)
-    baseline = float(min(y.min(), previous if previous else y.min()))
-    ceiling = float(max(y.max(), previous if previous else y.max()))
+    y = work["Close"].to_numpy(dtype=float)
+    baseline = float(min(y.min(), previous if previous is not None else y.min()))
+    ceiling = float(max(y.max(), previous if previous is not None else y.max()))
     spread = ceiling - baseline
     padding = max(spread * 0.22, abs(last_price) * 0.0025, 0.01)
     chart_bottom, chart_top = baseline - padding, ceiling + padding
-    if change_percent is None or abs(change_percent) < 1e-12:
-        line_color = "#9aa0a6"
-    elif change_percent > 0:
-        line_color = "#55e982"
-    else:
-        line_color = "#f26b63"
 
-    if _is_full_day_us_intraday(symbol, quote, timeframe):
-        x_positions = _plot_full_day_continuous(ax, work.index, pd.Series(y, index=work.index), line_color, chart_bottom)
+    if frame is not None:
+        _plot_session_coloured_line(ax, work.index, y, frame, line_color, chart_bottom)
     else:
+        x = work.index.to_pydatetime()
         ax.plot(x, y, linewidth=2.55, color=line_color, solid_capstyle="round", solid_joinstyle="round", antialiased=True, zorder=4)
         ax.fill_between(x, y, chart_bottom, color=line_color, alpha=0.11, zorder=1, antialiased=True)
         ax.scatter([x[-1]], [y[-1]], s=50, color=line_color, edgecolor="#202124", linewidth=1.5, zorder=6, antialiased=True)
-        x_positions = None
 
     if previous is not None:
         ax.axhline(previous, linewidth=1.0, linestyle=(0, (5, 6)), color="#e4e7eb", alpha=0.85, zorder=2)
-        ax.text(1.002, previous, f"Prev close\n{previous:.{digits}f}", transform=ax.get_yaxis_transform(), ha="left", va="center", fontsize=8.5, color="#d5d8de", linespacing=1.08)
+        ax.text(1.002, previous, f"Prev close\n{_fmt_value(previous, digits)}", transform=ax.get_yaxis_transform(), ha="left", va="center", fontsize=8.5, color="#d5d8de", linespacing=1.08)
     ax.set_ylim(chart_bottom, chart_top)
     ax.grid(axis="y", color="#34373b", linestyle="-", linewidth=0.65, alpha=0.75)
     ax.grid(axis="x", color="#34373b", linestyle="--", linewidth=0.55, alpha=0.55)
@@ -358,26 +357,26 @@ async def render_google_finance_chart(df: pd.DataFrame, symbol: str, timeframe: 
         spine.set_visible(False)
     ax.tick_params(colors="#d7dbe2", labelsize=8.5, length=0, pad=8)
     ax.yaxis.tick_right()
-    if x_positions is not None:
-        _configure_full_day_axis(ax, work.index, x_positions)
-        ax.set_xlim(x_positions[0], x_positions[-1])
-    else:
-        locator = mdates.AutoDateLocator(minticks=4, maxticks=6)
-        ax.xaxis.set_major_locator(locator)
-        ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
-        ax.xaxis.get_offset_text().set_visible(False)
-        ax.set_xlim(x[0], x[-1])
 
-    price_line = f"{last_price:.{digits}f}{currency_text}"
-    if change_percent is not None:
-        price_line += f"  {change_percent:+.2f}%"
+    if frame is not None:
+        _configure_us_equity_x_axis(ax, frame)
+    else:
+        x = work.index.to_pydatetime()
+        ax.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=4, maxticks=6))
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M" if is_1d else "%d %b", tz=UTC))
+        ax.xaxis.get_offset_text().set_visible(False)
+        if len(x) > 1:
+            ax.set_xlim(x[0], x[-1])
+
+    price_line = f"{_fmt_value(last_price, digits)}{currency_text}"
+    if period_perf is not None:
+        price_line += f"  {period_perf:+.2f}%"
     ax.text(0.0, 1.19, symbol.upper(), transform=ax.transAxes, ha="left", va="bottom", fontsize=20, fontweight="bold", color="#f8fafc")
-    ax.text(0.0, 1.065, price_line, transform=ax.transAxes, ha="left", va="bottom", fontsize=18, fontweight="bold", color=line_color if change_percent is not None else "#f8fafc")
+    ax.text(0.0, 1.065, price_line, transform=ax.transAxes, ha="left", va="bottom", fontsize=18, fontweight="bold", color=line_color if period_perf is not None else "#f8fafc")
 
     selector = ["1D", "5D", "1M", "6M", "YTD", "1Y", "5Y"]
     selected = _selector_key(timeframe)
-    start_x = 0.67
-    step = 0.047
+    start_x, step = 0.67, 0.047
     for idx, item in enumerate(selector):
         xpos = start_x + idx * step
         if item == selected:
@@ -387,13 +386,12 @@ async def render_google_finance_chart(df: pd.DataFrame, symbol: str, timeframe: 
         else:
             ax.text(xpos, 1.19, item, transform=ax.transAxes, ha="center", va="center", fontsize=10.5, color="#c7ccd4", zorder=8)
 
-    chart_date = pd.Timestamp(x[-1]).strftime("%Y-%b-%d")
+    chart_date = work.index[-1].tz_convert(UTC).strftime("%Y-%b-%d")
     ax.text(1.0, -0.105, chart_date, transform=ax.transAxes, ha="right", va="top", fontsize=8.5, color="#b9bec7")
-    ax.text(1.0, -0.145, timeframe.upper(), transform=ax.transAxes, ha="right", va="top", color="#b8bdc7", fontsize=8.0, fontweight="bold")
-
+    ax.text(1.0, -0.145, f"{timeframe.upper()} • UTC", transform=ax.transAxes, ha="right", va="top", color="#b8bdc7", fontsize=8.0, fontweight="bold")
     fig.add_artist(plt.Line2D([0.035, 0.93], [0.262, 0.262], transform=fig.transFigure, color="#34373b", linewidth=0.9))
 
-    rows = _asset_stats_rows(symbol, quote, stats, change_percent)
+    rows = _asset_stats_rows(symbol, quote, stats, period_perf)
     y_positions = [0.225, 0.182, 0.139]
     x_positions_text = [0.055, 0.36, 0.66]
     for ypos, row in zip(y_positions, rows):
