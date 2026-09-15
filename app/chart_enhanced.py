@@ -7,6 +7,7 @@ matplotlib.use("Agg")
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import pandas as pd
+from matplotlib.patches import Rectangle
 
 import app.charts as charts
 
@@ -18,7 +19,6 @@ _BG = "#202124"
 _GRID = "#34373b"
 _TEXT = "#f8fafc"
 _MUTED = "#9aa0a6"
-_BORDER = "#202124"
 
 
 def _prepare_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
@@ -56,30 +56,30 @@ def _compressed_x(index: pd.DatetimeIndex, compact: bool) -> list[float]:
 def _candle_width(x: list[float], compact: bool) -> float:
     if len(x) <= 1:
         return 0.45 if compact else 0.02
-    spacing = min((x[i + 1] - x[i]) for i in range(len(x) - 1) if x[i + 1] > x[i])
+    spacings = [x[i + 1] - x[i] for i in range(len(x) - 1) if x[i + 1] > x[i]]
+    spacing = min(spacings) if spacings else 1.0
     return spacing * (0.62 if compact else 0.58)
 
 
 def _draw_candles(ax, x: list[float], frame: pd.DataFrame, compact: bool, regular: pd.Series | None = None) -> None:
     width = _candle_width(x, compact)
+    spread = max(float(frame["High"].max() - frame["Low"].min()), 1e-9)
+    min_height = max(spread * 0.0012, 0.005)
     for i, (_, row) in enumerate(frame.iterrows()):
         open_ = float(row["Open"])
         close = float(row["Close"])
         high = float(row["High"])
         low = float(row["Low"])
-        if regular is None:
-            colour = _BODY_UP if close >= open_ else _BODY_DOWN
-        else:
-            colour = (_BODY_UP if close >= open_ else _BODY_DOWN) if bool(regular.iloc[i]) else _EXTENDED
+        base_colour = _BODY_UP if close >= open_ else _BODY_DOWN
+        colour = base_colour if regular is None or bool(regular.iloc[i]) else _EXTENDED
         ax.vlines(x[i], low, high, color=colour, linewidth=1.15, zorder=4, antialiased=True)
         body_bottom = min(open_, close)
-        body_height = abs(close - open_)
-        min_height = max((frame["High"].max() - frame["Low"].min()) * 0.0012, 0.005)
+        body_height = max(abs(close - open_), min_height)
         ax.add_patch(
-            plt.Rectangle(
+            Rectangle(
                 (x[i] - width / 2, body_bottom),
                 width,
-                max(body_height, min_height),
+                body_height,
                 facecolor=colour,
                 edgecolor=colour,
                 linewidth=0.55,
@@ -96,10 +96,8 @@ def _draw_volume(ax, x: list[float], frame: pd.DataFrame, compact: bool, regular
     volume = frame["Volume"].to_numpy(dtype=float)
     max_volume = float(volume.max()) if len(volume) else 0.0
     for i, value in enumerate(volume):
-        if regular is None:
-            colour = _BODY_UP if float(frame["Close"].iloc[i]) >= float(frame["Open"].iloc[i]) else _BODY_DOWN
-        else:
-            colour = (_BODY_UP if float(frame["Close"].iloc[i]) >= float(frame["Open"].iloc[i]) else _BODY_DOWN) if bool(regular.iloc[i]) else _EXTENDED
+        base_colour = _BODY_UP if float(frame["Close"].iloc[i]) >= float(frame["Open"].iloc[i]) else _BODY_DOWN
+        colour = base_colour if regular is None or bool(regular.iloc[i]) else _EXTENDED
         ax.bar(x[i], value, width=width, color=colour, alpha=0.45, align="center", zorder=2)
     ax.set_ylim(0, max(max_volume * 1.18, 1.0))
     ax.set_yticks([])
@@ -115,10 +113,10 @@ def _axis_labels(ax, frame: pd.DataFrame, x: list[float], compact: bool) -> None
     sample = list(dict.fromkeys(sample))
     ticks = [x[i] for i in sample]
     ax.set_xticks(ticks)
-    if compact:
-        labels = [pd.Timestamp(frame.index[i]).tz_convert("UTC").strftime("%H:%M") for i in sample]
-    else:
-        labels = [pd.Timestamp(frame.index[i]).tz_convert("UTC").strftime("%d %b") for i in sample]
+    labels = [
+        pd.Timestamp(frame.index[i]).tz_convert("UTC").strftime("%H:%M" if compact else "%d %b")
+        for i in sample
+    ]
     ax.set_xticklabels(labels)
     ax.tick_params(axis="x", colors="#d7dbe2", labelsize=8.5, length=0, pad=8)
 
@@ -178,8 +176,8 @@ async def render_enhanced_google_finance_chart(
     currency_text = f" {currency}" if currency else ""
 
     fig = plt.figure(figsize=(16.0, 8.8), dpi=240, facecolor=_BG)
-    ax = fig.add_axes([0.035, 0.33, 0.865, 0.50])
-    vol_ax = fig.add_axes([0.035, 0.275, 0.865, 0.045], sharex=ax)
+    ax = fig.add_axes([0.035, 0.34, 0.865, 0.49])
+    vol_ax = fig.add_axes([0.035, 0.275, 0.865, 0.05], sharex=ax)
     ax.set_facecolor(_BG)
     vol_ax.set_facecolor(_BG)
 
@@ -193,7 +191,6 @@ async def render_enhanced_google_finance_chart(
         ax.axhline(previous, linewidth=1.0, linestyle=(0, (5, 6)), color="#e4e7eb", alpha=0.78, zorder=2)
         ax.text(1.002, previous, f"Prev close\n{previous:.{digits}f}", transform=ax.get_yaxis_transform(), ha="left", va="center", fontsize=8.5, color="#d5d8de", linespacing=1.08)
 
-    # Highlight the latest price without turning the whole chart into a single-colour line.
     latest_colour = line_colour if regular is None else (line_colour if bool(regular.iloc[-1]) else _EXTENDED)
     ax.scatter([x[-1]], [last_price], s=48, color=latest_colour, edgecolor=_BG, linewidth=1.4, zorder=7)
     ax.set_ylim(chart_bottom, chart_top)
@@ -207,13 +204,8 @@ async def render_enhanced_google_finance_chart(
     vol_ax.tick_params(axis="y", length=0, labelleft=False, labelright=False)
     _axis_labels(vol_ax, frame, x, compact)
     plt.setp(ax.get_xticklabels(), visible=False)
-    if compact:
-        ax.set_xlim(x[0], x[-1])
-    else:
-        ax.set_xlim(x[0], x[-1])
-        ax.xaxis.set_major_formatter(lambda value, pos: "")
+    ax.set_xlim(x[0], x[-1])
 
-    # Header
     price_line = f"{last_price:.{digits}f}{currency_text}"
     if change_percent is not None:
         price_line += f"  {change_percent:+.2f}%"
@@ -227,14 +219,11 @@ async def render_enhanced_google_finance_chart(
     step = 0.047
     for idx, item in enumerate(selector):
         xpos = start_x + idx * step
-        if item == selected:
-            ax.text(xpos, 1.19, item, transform=ax.transAxes, ha="center", va="center", fontsize=10.5, fontweight="bold", color=_TEXT)
-        else:
-            ax.text(xpos, 1.19, item, transform=ax.transAxes, ha="center", va="center", fontsize=10.5, color="#c7ccd4")
+        ax.text(xpos, 1.19, item, transform=ax.transAxes, ha="center", va="center", fontsize=10.5, fontweight="bold" if item == selected else "normal", color=_TEXT if item == selected else "#c7ccd4")
 
     chart_date = pd.Timestamp(frame.index[-1]).tz_convert("UTC").strftime("%Y-%b-%d")
-    ax.text(1.0, -0.095, chart_date, transform=ax.transAxes, ha="right", va="top", fontsize=8.5, color="#b9bec7")
-    ax.text(1.0, -0.135, timeframe.upper(), transform=ax.transAxes, ha="right", va="top", color="#b8bdc7", fontsize=8.0, fontweight="bold")
+    ax.text(1.0, -0.10, chart_date, transform=ax.transAxes, ha="right", va="top", fontsize=8.5, color="#b9bec7")
+    ax.text(1.0, -0.14, timeframe.upper(), transform=ax.transAxes, ha="right", va="top", color="#b8bdc7", fontsize=8.0, fontweight="bold")
 
     fig.add_artist(plt.Line2D([0.035, 0.93], [0.292, 0.292], transform=fig.transFigure, color=_GRID, linewidth=0.9))
     rows = charts._asset_stats_rows(symbol, quote, stats, period_perf if not timeframe.upper().startswith("1D") else change_percent)
