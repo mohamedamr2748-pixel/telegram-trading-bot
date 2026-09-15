@@ -72,8 +72,7 @@ def _market_tone(quotes: list[object]) -> str:
 
 
 def _mover_line(mover: Mover, positive: bool) -> str:
-    icon = "🚀" if positive else "🔻"
-    return f"{icon} <code>{escape(mover.symbol)}</code>  <b>{_pct(mover.percent_change)}</b>"
+    return f"<code>{escape(mover.symbol)}</code>  <b>{_pct(mover.percent_change)}</b>"
 
 
 def _market_keyboard(gainers: tuple[Mover, ...], losers: tuple[Mover, ...]) -> InlineKeyboardMarkup:
@@ -124,13 +123,13 @@ async def _snapshot(market: MarketService) -> tuple[str, InlineKeyboardMarkup]:
 
     lines.extend(["", "━━━━━━━━━━━━━━━━", "", "🔥 <b>TOP MOVERS</b>", ""])
     if gainers:
-        lines.append("<b>🚀 GAINERS</b>")
+        lines.append("<b>GAINERS</b>")
         lines.extend(_mover_line(row, True) for row in gainers)
     else:
         lines.append("Gainers unavailable right now.")
     lines.append("")
     if losers:
-        lines.append("<b>🔻 LOSERS</b>")
+        lines.append("<b>LOSERS</b>")
         lines.extend(_mover_line(row, False) for row in losers)
     else:
         lines.append("Losers unavailable right now.")
@@ -194,13 +193,13 @@ async def _market_callback(callback: CallbackQuery) -> None:
         gainers, losers = await get_top_movers()
         lines = ["🔥 <b>TOP MOVERS</b>", ""]
         if gainers:
-            lines.append("<b>🚀 GAINERS</b>")
+            lines.append("<b>GAINERS</b>")
             lines.extend(_mover_line(row, True) for row in gainers)
         else:
             lines.append("Gainers unavailable right now.")
         lines.append("")
         if losers:
-            lines.append("<b>🔻 LOSERS</b>")
+            lines.append("<b>LOSERS</b>")
             lines.extend(_mover_line(row, False) for row in losers)
         else:
             lines.append("Losers unavailable right now.")
