@@ -2,6 +2,7 @@ import pandas as pd
 import pytest
 
 from app import charts
+from app.chart_sessions import build_frame
 
 
 def _series(index, values):
@@ -25,10 +26,21 @@ def test_sub_cent_formatting_never_uses_scientific_notation():
     assert charts._fmt_value(12.5) == "12.50"
 
 
+def test_us_frame_uses_real_observed_bounds():
+    idx = pd.date_range("2026-09-11 13:00", periods=44, freq="15min", tz="UTC")
+    frame = build_frame("NFE", idx[-1], "stock", observed_index=idx)
+    assert frame is not None
+    assert frame.x_min_utc == idx[0]
+    assert frame.x_max_utc == idx[-1]
+    assert frame.premarket_utc[0] == pd.Timestamp("2026-09-11 08:00", tz="UTC")
+    assert frame.regular_utc[0] == pd.Timestamp("2026-09-11 13:30", tz="UTC")
+    assert frame.aftermarket_utc[0] == pd.Timestamp("2026-09-11 20:00", tz="UTC")
+
+
 @pytest.mark.asyncio
-async def test_full_day_chart_uses_us_session_frame(monkeypatch):
-    idx = pd.date_range("2026-09-11 14:30", periods=4, freq="15min", tz="UTC")
-    df = _series(idx, [100, 101, 102, 103])
+async def test_full_day_chart_uses_observed_bounds_not_fixed_full_frame(monkeypatch):
+    idx = pd.date_range("2026-09-11 13:30", periods=15, freq="15min", tz="UTC")
+    df = _series(idx, [100 + i for i in range(len(idx))])
     captured = {}
     original = charts._configure_us_equity_x_axis
 
@@ -38,10 +50,10 @@ async def test_full_day_chart_uses_us_session_frame(monkeypatch):
         return original(ax, frame)
 
     monkeypatch.setattr(charts, "_configure_us_equity_x_axis", spy)
-    image = await charts.render_google_finance_chart(df, "AAPL", "1d/15m", prev_close=99, price=103)
+    image = await charts.render_google_finance_chart(df, "SP500", "1d/15m", prev_close=99, price=114)
     assert image.getbuffer().nbytes > 0
-    assert captured["min"] == pd.Timestamp("2026-09-11 08:00", tz="UTC")
-    assert captured["max"] == pd.Timestamp("2026-09-12 00:00", tz="UTC")
+    assert captured["min"] == idx[0]
+    assert captured["max"] == idx[-1]
 
 
 @pytest.mark.asyncio
