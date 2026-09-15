@@ -55,13 +55,7 @@ _US_INDEX_ALIASES = frozenset({
 
 
 def classify_asset(symbol: str, quote_asset_class: str | None = None) -> AssetKind:
-    """Classify a symbol for chart-session purposes.
-
-    Explicit symbol families win over provider metadata. When no explicit
-    non-US family is recognised and the symbol looks like a normal ticker,
-    default to US equity so the full-day frame is still available when quote
-    metadata is missing.
-    """
+    """Classify a symbol for chart-session purposes."""
     s = (symbol or "").strip().upper()
     compact = s.replace("/", "").replace("-", "").replace("_", "").replace("^", "")
 
@@ -121,26 +115,55 @@ def _et_to_utc(trading_date: date, clock: dtime) -> pd.Timestamp:
     return pd.Timestamp.combine(trading_date, clock).tz_localize(ET).tz_convert(UTC)
 
 
-def build_us_equity_frame(when_utc: pd.Timestamp) -> TradingFrame:
+def build_us_equity_frame(
+    when_utc: pd.Timestamp,
+    observed_index: pd.DatetimeIndex | None = None,
+) -> TradingFrame:
+    """Build the session frame, using real observations for the visible bounds.
+
+    Session boundaries remain fixed and DST-safe, while x_min/x_max describe
+    the actual data that exists. This keeps the chart faithful to the source:
+    extended-hours data is visible when present, and missing periods remain
+    empty rather than being filled with synthetic prices.
+    """
     trading_date = latest_us_trading_date(when_utc)
     premarket = (_et_to_utc(trading_date, PREMARKET_START), _et_to_utc(trading_date, REGULAR_START))
     regular = (_et_to_utc(trading_date, REGULAR_START), _et_to_utc(trading_date, REGULAR_END))
     aftermarket = (_et_to_utc(trading_date, REGULAR_END), _et_to_utc(trading_date, AFTERMARKET_END))
+
+    x_min = premarket[0]
+    x_max = aftermarket[1]
+    if observed_index is not None and len(observed_index):
+        observed = pd.DatetimeIndex(observed_index)
+        if observed.tz is None:
+            observed = observed.tz_localize(UTC)
+        else:
+            observed = observed.tz_convert(UTC)
+        observed = observed[(observed >= premarket[0]) & (observed <= aftermarket[1])]
+        if len(observed):
+            x_min = observed.min()
+            x_max = observed.max()
+
     return TradingFrame(
         asset_kind=AssetKind.US_EQUITY,
         trading_date=trading_date,
-        x_min_utc=premarket[0],
-        x_max_utc=aftermarket[1],
+        x_min_utc=x_min,
+        x_max_utc=x_max,
         premarket_utc=premarket,
         regular_utc=regular,
         aftermarket_utc=aftermarket,
     )
 
 
-def build_frame(symbol: str, when_utc: pd.Timestamp, quote_asset_class: str | None = None) -> TradingFrame | None:
+def build_frame(
+    symbol: str,
+    when_utc: pd.Timestamp,
+    quote_asset_class: str | None = None,
+    observed_index: pd.DatetimeIndex | None = None,
+) -> TradingFrame | None:
     if classify_asset(symbol, quote_asset_class) is not AssetKind.US_EQUITY:
         return None
-    return build_us_equity_frame(when_utc)
+    return build_us_equity_frame(when_utc, observed_index=observed_index)
 
 
 def classify_timestamp(timestamp: pd.Timestamp, trading_date: date) -> SessionKind:
