@@ -48,11 +48,6 @@ install_chart_utc()
 from app.chart_period_performance import install as install_chart_period_performance
 install_chart_period_performance()
 
-# Use richer Yahoo-style standard charts: OHLC candlesticks plus volume while
-# preserving the existing chart captions, selectors and statistics.
-from app.chart_enhanced import install as install_chart_enhanced
-install_chart_enhanced()
-
 # Replace only the legacy /market handler with the upgraded interactive
 # dashboard; all other bot handlers remain intact.
 from app.market_dashboard import install as install_market_dashboard
