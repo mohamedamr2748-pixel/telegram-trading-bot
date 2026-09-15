@@ -55,6 +55,12 @@ install_chart_period_performance()
 from app.chart_typography import install as install_chart_typography
 install_chart_typography()
 
+# Keep 1D intraday charts framed across the complete regular US session. This
+# extends only the x-axis when the session is still in progress; it never
+# invents future price data.
+from app.chart_full_day import install as install_chart_full_day
+install_chart_full_day()
+
 # Replace only the legacy /market handler with the upgraded interactive
 # dashboard; all other bot handlers remain intact.
 from app.market_dashboard import install as install_market_dashboard
