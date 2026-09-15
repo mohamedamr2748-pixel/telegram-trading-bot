@@ -1,7 +1,7 @@
 """Session classification and display-frame construction for intraday charts.
 
 This module is the single source of truth for chart session boundaries and
-asset-aware session handling.  US equity sessions are defined in
+asset-aware session handling. US equity sessions are defined in
 America/New_York and converted to UTC with zoneinfo so DST is handled without
 fixed UTC offsets.
 """
@@ -57,8 +57,10 @@ _US_INDEX_ALIASES = frozenset({
 def classify_asset(symbol: str, quote_asset_class: str | None = None) -> AssetKind:
     """Classify a symbol for chart-session purposes.
 
-    Explicit symbol families win over provider metadata so a provider label
-    cannot accidentally apply US equity hours to a known crypto/FX symbol.
+    Explicit symbol families win over provider metadata. When no explicit
+    non-US family is recognised and the symbol looks like a normal ticker,
+    default to US equity so the full-day frame is still available when quote
+    metadata is missing.
     """
     s = (symbol or "").strip().upper()
     compact = s.replace("/", "").replace("-", "").replace("_", "").replace("^", "")
@@ -67,7 +69,7 @@ def classify_asset(symbol: str, quote_asset_class: str | None = None) -> AssetKi
         return AssetKind.CRYPTO
     if s.endswith("=X") or compact in _FOREX_COMPACT:
         return AssetKind.FOREX
-    if s.endswith("=F"):
+    if s.endswith("=F") or compact in {"XAUUSD", "XAGUSD"}:
         return AssetKind.COMMODITY
     if s.startswith("^") or compact in _US_INDEX_ALIASES:
         return AssetKind.US_EQUITY
@@ -82,6 +84,9 @@ def classify_asset(symbol: str, quote_asset_class: str | None = None) -> AssetKi
             return AssetKind.COMMODITY
         if qc in {"stock", "index", "equity"}:
             return AssetKind.US_EQUITY
+
+    if s and s.replace(".", "").isalnum() and "=" not in s and ":" not in s and "/" not in s:
+        return AssetKind.US_EQUITY
     return AssetKind.OTHER
 
 
@@ -132,23 +137,13 @@ def build_us_equity_frame(when_utc: pd.Timestamp) -> TradingFrame:
     )
 
 
-def build_frame(
-    symbol: str,
-    when_utc: pd.Timestamp,
-    quote_asset_class: str | None = None,
-) -> TradingFrame | None:
-    """Build a US-equity frame, otherwise return ``None``.
-
-    Non-US assets keep their natural data extent and are never forced into
-    US equity session hours.
-    """
+def build_frame(symbol: str, when_utc: pd.Timestamp, quote_asset_class: str | None = None) -> TradingFrame | None:
     if classify_asset(symbol, quote_asset_class) is not AssetKind.US_EQUITY:
         return None
     return build_us_equity_frame(when_utc)
 
 
 def classify_timestamp(timestamp: pd.Timestamp, trading_date: date) -> SessionKind:
-    """Classify one timestamp against a US equity trading date."""
     stamp = _ensure_utc(timestamp).tz_convert(ET)
     if stamp.date() != trading_date:
         return SessionKind.CLOSED
