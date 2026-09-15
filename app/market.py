@@ -367,13 +367,32 @@ class YFinanceProvider(MarketProvider):
             yf_symbol = self._history_symbol(symbol)
             ticker = yf.Ticker(yf_symbol)
             history_kwargs = {"period": period, "interval": interval, "auto_adjust": False}
-            # Request extended-hours observations only for intraday U.S. equities.
-            # Broad market indices (for example ^GSPC, ^IXIC, ^DJI) do not use
-            # the prepost flag here; Yahoo Finance may reject that request for indices.
-            # The chart still uses the same 1d/15m window for the dashboard.
+            # Extended-hours data is requested for stocks only. Broad-market
+            # indices must not use prepost because Yahoo may reject it.
             if interval.endswith(("m", "h")) and self._classify(symbol) == "stock" and not inverse:
                 history_kwargs["prepost"] = True
             df = ticker.history(**history_kwargs)
+
+            # Broad-market indices can intermittently return only one intraday
+            # row for a direct 1D request. A single row renders as one dot, so
+            # retry on a wider window and extract the latest available trading
+            # date. This keeps the public chart at the requested 1D/15m view.
+            if interval.endswith(("m", "h")) and self._classify(symbol) == "index" and len(df) < 2:
+                fallback_kwargs = {"period": "5d", "interval": interval, "auto_adjust": False}
+                try:
+                    fallback = ticker.history(**fallback_kwargs)
+                except Exception:
+                    fallback = pd.DataFrame()
+                if len(fallback) >= 2:
+                    fallback = fallback.copy()
+                    fallback.index = pd.to_datetime(fallback.index)
+                    latest_day = fallback.index.max().date()
+                    same_day = fallback.loc[fallback.index.date == latest_day]
+                    if len(same_day) >= 2:
+                        df = same_day
+                    else:
+                        df = fallback.tail(min(len(fallback), 32))
+
             if df.empty:
                 raise ValueError(f"No historical data found for {symbol} (Yahoo symbol: {yf_symbol})")
             return self._invert_history(df) if inverse else df
