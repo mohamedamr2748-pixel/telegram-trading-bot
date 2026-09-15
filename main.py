@@ -48,6 +48,11 @@ install_chart_utc()
 from app.chart_period_performance import install as install_chart_period_performance
 install_chart_period_performance()
 
+# Add a compact, data-rich header without changing the clean Yahoo-style
+# line/area chart itself.
+from app.chart_header_details import install as install_chart_header_details
+install_chart_header_details()
+
 # Replace only the legacy /market handler with the upgraded interactive
 # dashboard; all other bot handlers remain intact.
 from app.market_dashboard import install as install_market_dashboard
