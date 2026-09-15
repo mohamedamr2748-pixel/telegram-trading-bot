@@ -20,8 +20,9 @@ def install(scale: float = 1.28, x_axis_scale: float = 1.22) -> None:
     @wraps(original_axes_text)
     def axes_text(self, x, y, s, *args, **kwargs):
         # The chart creates the previous-close annotation as:
-        # "Prev close\n<value>". Render it as one compact annotation just
-        # above the dashed reference line, without overlapping the axis.
+        # "Prev close\n<value>". Render it as two adjacent text artists:
+        # regular "Prev. close" followed by a bold value, both slightly
+        # above the dashed reference line.
         if isinstance(s, str) and s.startswith("Prev close\n"):
             value_text = s.split("\n", 1)[1]
             try:
@@ -29,10 +30,16 @@ def install(scale: float = 1.28, x_axis_scale: float = 1.22) -> None:
             except (TypeError, ValueError):
                 pass
 
+            try:
+                low, high = self.get_ylim()
+                span = abs(float(high) - float(low))
+                offset = max(span * 0.025, 0.01)
+            except Exception:
+                offset = 0.01
+
             text_kwargs = dict(kwargs)
-            text_kwargs["ha"] = "right"
-            text_kwargs["va"] = "bottom"
             text_kwargs["transform"] = kwargs.get("transform", self.get_yaxis_transform())
+            text_kwargs["va"] = "bottom"
             text_kwargs["color"] = kwargs.get("color", "#d5d8de")
 
             if "fontsize" in text_kwargs:
@@ -46,50 +53,42 @@ def install(scale: float = 1.28, x_axis_scale: float = 1.22) -> None:
                 except (TypeError, ValueError):
                     pass
 
-            # Place the whole annotation above the reference line. Keep it
-            # inside the axes, leaving the right-axis tick labels untouched.
-            label_artist = original_axes_text(
-                self,
-                0.930,
-                y + offset if False else y,
-                "Prev. close",
-                *args,
-                **text_kwargs,
-            )
-
-            # The requested visual is "Prev. close 7,619.98". Draw the value
-            # immediately to the right of the label, using a small display-space
-            # offset so the two pieces remain together at any figure size.
-            renderer = self.figure.canvas.get_renderer()
-            bbox = label_artist.get_window_extent(renderer=renderer)
-            try:
-                inv = self.transAxes.inverted()
-                value_x = float(inv.transform((bbox.x1 + 5.0, bbox.y0))[0])
-            except Exception:
-                value_x = 0.995
-
+            # Anchor the bold value near the right edge, then calculate the
+            # label position from its rendered width. This guarantees the
+            # visual order is exactly: "Prev. close  7,619.98".
             value_kwargs = dict(text_kwargs)
+            value_kwargs["ha"] = "right"
             value_kwargs["fontweight"] = "bold"
+            value_kwargs["color"] = "#f8fafc"
             value_artist = original_axes_text(
                 self,
-                value_x,
-                y,
+                0.995,
+                y + offset,
                 value_text,
                 *args,
                 **value_kwargs,
             )
 
-            # Shift both artists upward together by a small amount in display
-            # coordinates. This keeps the annotation clearly above the dashed
-            # line instead of sitting directly on it.
             try:
-                low, high = self.get_ylim()
-                span = abs(float(high) - float(low))
-                offset = max(span * 0.025, 0.01)
-                label_artist.set_position((0.930, y + offset))
-                value_artist.set_position((value_x, y + offset))
+                renderer = self.figure.canvas.get_renderer()
+                bbox = value_artist.get_window_extent(renderer=renderer)
+                inv = self.transAxes.inverted()
+                gap_px = 6.0
+                label_x = float(inv.transform((bbox.x0 - gap_px, bbox.y0))[0])
             except Exception:
-                pass
+                label_x = 0.925
+
+            label_kwargs = dict(text_kwargs)
+            label_kwargs["ha"] = "right"
+            label_kwargs["fontweight"] = "normal"
+            original_axes_text(
+                self,
+                label_x,
+                y + offset,
+                "Prev. close",
+                *args,
+                **label_kwargs,
+            )
             return value_artist
 
         if "fontsize" in kwargs:
