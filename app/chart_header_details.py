@@ -123,9 +123,8 @@ async def _render_with_header(original_render, *args, **kwargs) -> io.BytesIO:
     line_one, line_two, line_three, line_four = _metadata_lines(df, symbol, timeframe, quote)
 
     width, height = base.size
-    # Four compact metadata rows keep the chart itself large while making the
-    # important market statistics readable after Telegram scales the image.
-    pad_top = max(148, int(height * 0.15))
+    # Keep the metadata readable after Telegram scales a 1536px-wide image.
+    pad_top = max(156, int(height * 0.16))
     canvas = Image.new("RGB", (width, height + pad_top), "#202124")
     canvas.paste(base, (0, pad_top))
     draw = ImageDraw.Draw(canvas)
@@ -135,23 +134,25 @@ async def _render_with_header(original_render, *args, **kwargs) -> io.BytesIO:
     divider = "#34373b"
 
     x = int(width * 0.035)
-    meta_size = max(20, int(width / 78))
+    # Deliberately use a substantially larger fixed size so the four metadata
+    # rows remain readable on a phone after Telegram's image scaling.
+    meta_size = max(29, int(width / 52))
     small = _font(meta_size, bold=False)
     values = _font(meta_size, bold=True)
-    value_size = max(21, int(width / 72))
+    value_size = max(30, int(width / 50))
     values_large = _font(value_size, bold=True)
 
-    y_one = int(pad_top * 0.08)
-    y_two = int(pad_top * 0.34)
-    y_three = int(pad_top * 0.57)
-    y_four = int(pad_top * 0.79)
+    y_one = int(pad_top * 0.06)
+    y_two = int(pad_top * 0.31)
+    y_three = int(pad_top * 0.55)
+    y_four = int(pad_top * 0.77)
 
     draw.text((x, y_one), line_one, font=small, fill=muted)
     draw.text((x, y_two), line_two, font=values_large, fill=bright)
     draw.text((x, y_three), line_three, font=values, fill=bright)
     draw.text((x, y_four), line_four, font=values, fill=bright)
 
-    divider_y = int(pad_top * 0.97)
+    divider_y = int(pad_top * 0.96)
     draw.line(
         (x, divider_y, int(width * 0.93), divider_y),
         fill=divider,
