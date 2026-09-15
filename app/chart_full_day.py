@@ -19,8 +19,8 @@ def install() -> None:
 
     def configure_full_day_axis(ax, index, x_positions):
         # First let the existing UTC axis implementation configure fonts and
-        # basic labels. We then replace only the x-range/ticks when the
-        # regular session is still in progress.
+        # labels. The base renderer later calls ax.set_xlim() again, so the
+        # full-day endpoint must be enforced at the axes-instance level.
         original_configure(ax, index, x_positions)
 
         if len(index) < 2 or len(x_positions) < 2:
@@ -38,19 +38,13 @@ def install() -> None:
             if pd.isna(interval) or interval <= pd.Timedelta(0):
                 return
 
-            # This layer is used by the 1D full-day renderer for US stocks and
-            # indices. Only extend when the current data is still inside the
-            # regular session. Never add synthetic price points.
+            # Only extend a live regular-session chart. Completed sessions and
+            # histories containing extended-hours data keep their natural span.
             if ny[0].time() > _REGULAR_OPEN or ny[-1].time() >= _REGULAR_CLOSE:
                 return
             if not all(_REGULAR_OPEN <= stamp.time() < _REGULAR_CLOSE for stamp in ny):
                 return
 
-            # The compressed x-axis starts at the first real observation.
-            # For the normal US 15-minute session this is 09:30 NY, giving
-            # 27 slots through 16:00 NY. Calculate the endpoint from the real
-            # interval so this also remains correct if the provider changes
-            # the intraday interval.
             session_open = ny[0].replace(hour=9, minute=30, second=0, microsecond=0)
             session_close = ny[0].replace(hour=16, minute=0, second=0, microsecond=0)
             if ny[0] != session_open:
@@ -61,7 +55,19 @@ def install() -> None:
             if regular_end_position <= current_right:
                 return
 
-            ax.set_xlim(-0.5, regular_end_position + 0.5)
+            # charts.py calls ax.set_xlim(x_positions[0], x_positions[-1])
+            # after this function returns. Override only this axes instance so
+            # that call cannot collapse the chart back to the latest point.
+            original_set_xlim = ax.set_xlim
+            state = {"applied": False}
+
+            def set_xlim_full_day(*args, **kwargs):
+                if not state["applied"]:
+                    state["applied"] = True
+                    return original_set_xlim(-0.5, regular_end_position + 0.5)
+                return original_set_xlim(*args, **kwargs)
+
+            ax.set_xlim = set_xlim_full_day
 
             # Hourly UTC labels across the complete regular US session.
             tick_positions = []
