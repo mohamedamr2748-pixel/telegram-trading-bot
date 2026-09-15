@@ -344,9 +344,13 @@ def _plot_session_coloured_line(ax, index: pd.DatetimeIndex, values, frame: Trad
 def _configure_us_equity_x_axis(ax, frame: TradingFrame) -> None:
     x_min = mdates.date2num(frame.x_min_utc.to_pydatetime())
     x_max = mdates.date2num(frame.x_max_utc.to_pydatetime())
-    pad = (x_max - x_min) * 0.03
-    ax.set_xlim(x_min - pad, x_max + pad)
-    ax.xaxis.set_major_locator(mdates.HourLocator(byhour=range(0, 24, 2), tz=UTC))
+    if x_max <= x_min:
+        half_hour = 30.0 / (24.0 * 60.0)
+        x_min -= half_hour
+        x_max += half_hour
+    ax.set_xlim(x_min, x_max)
+    locator = mdates.AutoDateLocator(minticks=6, maxticks=8, interval_multiples=True)
+    ax.xaxis.set_major_locator(locator)
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M", tz=UTC))
     ax.xaxis.get_offset_text().set_visible(False)
 
@@ -380,7 +384,12 @@ async def render_google_finance_chart(
             change_percent = quote.change_percent
 
     is_1d = timeframe.upper().startswith("1D")
-    frame = build_frame(symbol, work.index[-1], quote.asset_class if quote else None) if is_1d else None
+    frame = build_frame(
+        symbol,
+        work.index[-1],
+        quote.asset_class if quote else None,
+        observed_index=work.index,
+    ) if is_1d else None
     trading_date_iso = frame.trading_date.isoformat() if frame and frame.trading_date else None
 
     if quote is not None and quote.source == "yfinance" and is_1d:
