@@ -68,7 +68,12 @@ def _session_label(quote: Any = None) -> str:
     return "UNKNOWN"
 
 
-def _metadata_lines(frame: pd.DataFrame, symbol: str, timeframe: str, quote: Any = None) -> tuple[str, str, str]:
+def _metadata_lines(
+    frame: pd.DataFrame,
+    symbol: str,
+    timeframe: str,
+    quote: Any = None,
+) -> tuple[str, str, str, str]:
     work = frame.copy()
     work.index = pd.to_datetime(work.index, utc=True)
     work = work.sort_index()
@@ -94,12 +99,12 @@ def _metadata_lines(frame: pd.DataFrame, symbol: str, timeframe: str, quote: Any
     )
     line_three = (
         f"PREV CLOSE  {_fmt_price(previous)}     "
-        f"DAY RANGE  {_fmt_price(low)} — {_fmt_price(high)}     "
-        f"SESSION  {session}"
+        f"DAY RANGE  {_fmt_price(low)} — {_fmt_price(high)}"
     )
+    line_four = f"SESSION  {session}"
     if year_high is not None and year_low is not None:
-        line_three += f"     52W  {_fmt_price(year_low)} — {_fmt_price(year_high)}"
-    return line_one, line_two, line_three
+        line_four += f"     52W  {_fmt_price(year_low)} — {_fmt_price(year_high)}"
+    return line_one, line_two, line_three, line_four
 
 
 async def _render_with_header(original_render, *args, **kwargs) -> io.BytesIO:
@@ -115,32 +120,38 @@ async def _render_with_header(original_render, *args, **kwargs) -> io.BytesIO:
     if not isinstance(df, pd.DataFrame) or df.empty:
         return rendered
 
-    line_one, line_two, line_three = _metadata_lines(df, symbol, timeframe, quote)
+    line_one, line_two, line_three, line_four = _metadata_lines(df, symbol, timeframe, quote)
 
     width, height = base.size
-    pad_top = max(104, int(height * 0.105))
+    # Four compact metadata rows keep the chart itself large while making the
+    # important market statistics readable after Telegram scales the image.
+    pad_top = max(148, int(height * 0.15))
     canvas = Image.new("RGB", (width, height + pad_top), "#202124")
     canvas.paste(base, (0, pad_top))
     draw = ImageDraw.Draw(canvas)
 
     muted = "#9aa0a6"
-    bright = "#d7dbe2"
+    bright = "#e8eaed"
     divider = "#34373b"
 
-    # Keep the metadata clearly readable on Telegram without competing with
-    # the main ticker/price already rendered by the chart itself.
-    small = _font(max(18, int(width / 135)), bold=False)
-    values = _font(max(18, int(width / 135)), bold=True)
     x = int(width * 0.035)
-    y_one = int(pad_top * 0.10)
-    y_two = int(pad_top * 0.40)
-    y_three = int(pad_top * 0.70)
+    meta_size = max(20, int(width / 78))
+    small = _font(meta_size, bold=False)
+    values = _font(meta_size, bold=True)
+    value_size = max(21, int(width / 72))
+    values_large = _font(value_size, bold=True)
+
+    y_one = int(pad_top * 0.08)
+    y_two = int(pad_top * 0.34)
+    y_three = int(pad_top * 0.57)
+    y_four = int(pad_top * 0.79)
 
     draw.text((x, y_one), line_one, font=small, fill=muted)
-    draw.text((x, y_two), line_two, font=values, fill=bright)
-    draw.text((x, y_three), line_three, font=small, fill=bright)
+    draw.text((x, y_two), line_two, font=values_large, fill=bright)
+    draw.text((x, y_three), line_three, font=values, fill=bright)
+    draw.text((x, y_four), line_four, font=values, fill=bright)
 
-    divider_y = int(pad_top * 0.96)
+    divider_y = int(pad_top * 0.97)
     draw.line(
         (x, divider_y, int(width * 0.93), divider_y),
         fill=divider,
