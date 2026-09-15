@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from html import escape
 from datetime import datetime, timezone
+from html import escape
 
 from aiogram import F
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
@@ -19,13 +19,7 @@ LABELS = {
     "BTC-USD": "Bitcoin",
     "GC=F": "Gold",
 }
-PRICE_DIGITS = {
-    "^GSPC": 2,
-    "^IXIC": 2,
-    "^DJI": 2,
-    "BTC-USD": 2,
-    "GC=F": 2,
-}
+PRICE_DIGITS = {symbol: 2 for symbol in SYMBOLS}
 
 
 def _pct(value: float | None) -> str:
@@ -63,17 +57,17 @@ def _session_label(status: str | None) -> str:
     return "⚪ Unknown"
 
 
-def _market_tone(quotes: list[object]) -> tuple[str, str]:
+def _market_tone(quotes: list[object]) -> str:
     moves = [float(q.change_percent) for q in quotes if hasattr(q, "change_percent") and q.change_percent is not None]
     if not moves:
-        return "🟡 Mixed", "Mixed"
+        return "🟡 Mixed"
     positives = sum(value > 0 for value in moves)
     negatives = sum(value < 0 for value in moves)
     if positives > negatives:
-        return "🟢 Positive", "Positive"
+        return "🟢 Positive"
     if negatives > positives:
-        return "🔴 Negative", "Negative"
-    return "🟡 Mixed", "Mixed"
+        return "🔴 Negative"
+    return "🟡 Mixed"
 
 
 def _mover_line(mover: Mover, positive: bool) -> str:
@@ -88,27 +82,18 @@ def _market_keyboard(gainers: tuple[Mover, ...], losers: tuple[Mover, ...]) -> I
         [InlineKeyboardButton(text="🥇 Gold", callback_data="marketv2:chart:GC=F"), InlineKeyboardButton(text="🔥 Top Movers", callback_data="marketv2:movers")],
         [InlineKeyboardButton(text="🔄 Refresh", callback_data="marketv2:refresh")],
     ]
-    movers = [*gainers, *losers]
-    mover_buttons: list[InlineKeyboardButton] = []
-    for mover in movers[:6]:
-        mover_buttons.append(InlineKeyboardButton(text=mover.symbol[:10], callback_data=f"marketv2:chart:{mover.symbol}"))
-    if mover_buttons:
-        rows.append(mover_buttons[:2])
-        if len(mover_buttons) > 2:
-            rows.append(mover_buttons[2:4])
-        if len(mover_buttons) > 4:
-            rows.append(mover_buttons[4:6])
+    movers = [*gainers, *losers][:6]
+    for start in range(0, len(movers), 2):
+        rows.append([InlineKeyboardButton(text=row.symbol[:10], callback_data=f"marketv2:chart:{row.symbol}") for row in movers[start:start + 2]])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 async def _snapshot(market: MarketService) -> tuple[str, InlineKeyboardMarkup]:
     quotes = await asyncio.gather(*(market.get_quote(symbol) for symbol in SYMBOLS), return_exceptions=True)
     gainers, losers = await get_top_movers()
+    valid_quotes = [quote for quote in quotes if not isinstance(quote, Exception)]
 
-    valid_quotes = [q for q in quotes if not isinstance(q, Exception)]
     us_status = _session_label(getattr(quotes[0], "market_status", None) if not isinstance(quotes[0], Exception) else None)
-    tone, _ = _market_tone(valid_quotes)
-
     lines = [
         "🌍 <b>MARKET OVERVIEW</b>",
         "━━━━━━━━━━━━━━━━",
@@ -116,9 +101,7 @@ async def _snapshot(market: MarketService) -> tuple[str, InlineKeyboardMarkup]:
         "🇺🇸 <b>US MARKETS</b>",
         "",
     ]
-
-    for symbol in SYMBOLS[:3]:
-        quote = quotes[SYMBOLS.index(symbol)]
+    for symbol, quote in zip(SYMBOLS[:3], quotes[:3]):
         if isinstance(quote, Exception):
             lines.append(f"<b>{LABELS[symbol]}</b>  <code>n/a</code>  ⚪ unavailable")
         else:
@@ -152,7 +135,7 @@ async def _snapshot(market: MarketService) -> tuple[str, InlineKeyboardMarkup]:
         lines.append("🔻 Losers unavailable right now.")
 
     updated = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
-    lines.extend(["", "━━━━━━━━━━━━━━━━", f"📊 Market tone: <b>{tone}</b>", f"🕐 Updated: <code>{updated}</code>"])
+    lines.extend(["", "━━━━━━━━━━━━━━━━", f"📊 Market tone: <b>{_market_tone(valid_quotes)}</b>", f"🕐 Updated: <code>{updated}</code>"])
     return "\n".join(lines), _market_keyboard(gainers, losers)
 
 
@@ -200,8 +183,8 @@ async def _market_callback(callback: CallbackQuery) -> None:
     if kind == "chart" and len(action) == 3:
         symbol = action[2]
         from app.bot import chart_callback
-        callback.data = f"chart:{symbol}"
-        await chart_callback(callback)
+        forwarded = callback.model_copy(update={"data": f"chart:{symbol}"})
+        await chart_callback(forwarded)
         return
     await callback.answer()
 
