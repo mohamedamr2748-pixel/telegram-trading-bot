@@ -1,25 +1,30 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote_plus, urlparse
+from zoneinfo import ZoneInfo
 
 import feedparser
 import httpx
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from app.db import NewsAsset, NewsItem, engine, session_factory
 from app.domain import NewsItemDTO
+from app.news_demand import NewsDemandTracker
 
 logger = logging.getLogger(__name__)
 
-# Baseline collector cadence. Per-symbol demand can be added later without
-# coupling /news requests to external providers.
-DEFAULT_POLL_SECONDS = 2 * 60 * 60
+SCHEDULER_SECONDS = 5 * 60
+ACTIVE_HOURS = 6
+NORMAL_HOURS = 24
 RETENTION_HOURS = 48
 FETCH_LIMIT = 40
+ACTIVE_POLL_MINUTES = 15
+ACTIVE_POLL_OFF_HOURS_MINUTES = 30
+NORMAL_POLL_HOURS = 2
+MARKET_TZ = ZoneInfo("America/New_York")
 
 
 def _normalise_symbol(symbol: str) -> str:
@@ -49,9 +54,19 @@ def _google_news_url(symbol: str) -> str:
     return f"https://news.google.com/rss/search?q={query}&hl=en-US&gl=US&ceid=US:en"
 
 
-class GoogleNewsFeed:
-    """Fetch a symbol's Google News RSS feed and persist only news rows."""
+def _is_us_equity(symbol: str) -> bool:
+    return symbol not in {"BTCUSD", "ETHUSD", "XAUUSD", "EURUSD", "GBPUSD", "USDJPY"}
 
+
+def _is_regular_market_hours(now: datetime | None = None) -> bool:
+    local = (now or datetime.now(timezone.utc)).astimezone(MARKET_TZ)
+    if local.weekday() >= 5:
+        return False
+    minute = local.hour * 60 + local.minute
+    return 9 * 60 + 30 <= minute < 16 * 60
+
+
+class GoogleNewsFeed:
     async def fetch(self, symbol: str, limit: int = FETCH_LIMIT) -> list[NewsItemDTO]:
         symbol = _normalise_symbol(symbol)
         async with httpx.AsyncClient(timeout=20, headers={"User-Agent": "TickaroNewsFeed/1.0"}) as client:
@@ -96,38 +111,74 @@ async def cleanup_old_news(hours: int = RETENTION_HOURS) -> None:
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
     async with engine.begin() as conn:
         await conn.execute(
-            __import__("sqlalchemy").text(
-                "DELETE FROM news_assets WHERE news_id IN (SELECT id FROM news WHERE published_at IS NOT NULL AND published_at < :cutoff)"
-            ),
+            text("DELETE FROM news_assets WHERE news_id IN (SELECT id FROM news WHERE published_at IS NOT NULL AND published_at < :cutoff)"),
             {"cutoff": cutoff},
         )
         await conn.execute(
-            __import__("sqlalchemy").text(
-                "DELETE FROM news WHERE published_at IS NOT NULL AND published_at < :cutoff"
-            ),
+            text("DELETE FROM news WHERE published_at IS NOT NULL AND published_at < :cutoff"),
             {"cutoff": cutoff},
         )
 
 
 class NewsFeedWorker:
-    def __init__(self, symbols: list[str], poll_seconds: int = DEFAULT_POLL_SECONDS) -> None:
-        self.symbols = [_normalise_symbol(s) for s in symbols if s.strip()]
-        self.poll_seconds = max(300, poll_seconds)
+    """Adaptive ticker collector: active -> 15/30m, normal -> 2h, dormant -> off."""
+
+    def __init__(self, candidate_symbols: list[str]) -> None:
+        self.candidate_symbols = {_normalise_symbol(s) for s in candidate_symbols if s.strip()}
         self.provider = GoogleNewsFeed()
+        self.demand = NewsDemandTracker()
+
+    async def _tracked_symbols(self) -> list[str]:
+        # Candidate tickers are known up front, but are fetched only after
+        # aggregate demand exists. /news can dynamically add any valid ticker.
+        return sorted(self.candidate_symbols | set(await self.demand.symbols()))
+
+    async def _interval_seconds(self, symbol: str, now: datetime) -> int | None:
+        last_requested = await self.demand.get_last_requested(symbol)
+        if last_requested is None:
+            return None
+        age_hours = max(0.0, (now - last_requested).total_seconds() / 3600)
+        if age_hours <= ACTIVE_HOURS:
+            if _is_us_equity(symbol) and _is_regular_market_hours(now):
+                return ACTIVE_POLL_MINUTES * 60
+            return ACTIVE_POLL_OFF_HOURS_MINUTES * 60
+        if age_hours <= NORMAL_HOURS:
+            return NORMAL_POLL_HOURS * 3600
+        return None
+
+    async def _is_due(self, symbol: str, now: datetime) -> bool:
+        interval = await self._interval_seconds(symbol, now)
+        if interval is None:
+            return False
+        last_fetched = await self.demand.get_last_fetched(symbol)
+        if last_fetched is None:
+            return True
+        return (now - last_fetched).total_seconds() >= interval
+
+    async def _refresh_symbol(self, symbol: str) -> None:
+        now = datetime.now(timezone.utc)
+        if not await self._is_due(symbol, now):
+            return
+        try:
+            items = await self.provider.fetch(symbol)
+            inserted = await store_news(items)
+            await self.demand.mark_fetched(symbol)
+            logger.info("News feed %s: fetched=%s inserted=%s", symbol, len(items), inserted)
+        except Exception:
+            logger.exception("News feed fetch failed for %s", symbol)
 
     async def run(self) -> None:
         while True:
             try:
-                for symbol in self.symbols:
-                    try:
-                        items = await self.provider.fetch(symbol)
-                        inserted = await store_news(items)
-                        logger.info("News feed %s: fetched=%s inserted=%s", symbol, len(items), inserted)
-                    except Exception:
-                        logger.exception("News feed fetch failed for %s", symbol)
+                symbols = await self._tracked_symbols()
+                for symbol in symbols:
+                    await self._refresh_symbol(symbol)
                 await cleanup_old_news()
             except asyncio.CancelledError:
                 raise
             except Exception:
                 logger.exception("News feed worker failed")
-            await asyncio.sleep(self.poll_seconds)
+            await asyncio.sleep(SCHEDULER_SECONDS)
+
+    async def close(self) -> None:
+        await self.demand.close()
