@@ -11,40 +11,31 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
 from app.alerts import evaluate_alerts
+from app.cache_cleanup import purge_market_cache
 from app.db import init_db, session_factory
 from app.market import MarketService
 from app.market_enrichment import install_market_enrichment
+from app.news_feed import NewsFeedWorker
 from app.symbol_aliases import install_symbol_aliases
 from config import settings
 
-# Install market/symbol enrichment before importing app.bot because bot.py
-# constructs its MarketService at import time.
 install_market_enrichment()
 install_symbol_aliases()
 
-# Keep the invalid-ticker guide portable and use the dedicated implementation.
 from app.ticker_guide import ticker_format_image
 import app.bot as bot_module
 bot_module.ticker_format_image = ticker_format_image
 
-# The chart renderer owns UTC display labels, period performance and the
-# US-equity session classification. Typography remains orthogonal.
 from app.chart_typography import install as install_chart_typography
 install_chart_typography()
 
-# Match the reference chart: use the real observation domain for the x-axis
-# while retaining centralized US session colouring and no synthetic prices.
 from app import charts as charts_module
 from app.chart_reference_style import configure_observed_bounds
 charts_module._configure_us_equity_x_axis = configure_observed_bounds
 
-# Indexes use index-specific metrics (volume/session/day change) rather than
-# stock-only fields such as market cap that may not exist for an index quote.
 from app.index_stats import install as install_index_stats
 install_index_stats(charts_module)
 
-# Replace only the legacy /market handler with the upgraded interactive
-# dashboard; all other bot handlers remain intact.
 from app.market_dashboard import install as install_market_dashboard
 install_market_dashboard(bot_module)
 
@@ -68,6 +59,9 @@ async def init_db_with_retry() -> None:
     while True:
         try:
             await init_db()
+            if settings.purge_market_cache_on_startup:
+                await purge_market_cache()
+                logger.warning("One-time non-user market/news cache purge completed")
             db_ready = True
             logger.info("Database initialization completed")
             return
@@ -99,6 +93,11 @@ async def alert_loop(bot: Bot) -> None:
         await asyncio.sleep(max(5, settings.alert_poll_seconds))
 
 
+async def run_news_feed() -> None:
+    worker = NewsFeedWorker(settings.scanner_symbols, settings.news_poll_seconds)
+    await worker.run()
+
+
 async def run_health_server() -> None:
     config = uvicorn.Config(
         app,
@@ -114,7 +113,8 @@ async def run_bot() -> None:
     health_server = asyncio.create_task(run_health_server())
     db_task = asyncio.create_task(init_db_with_retry())
     bot: Bot | None = None
-    worker: asyncio.Task | None = None
+    alert_worker: asyncio.Task | None = None
+    news_worker: asyncio.Task | None = None
     try:
         if not settings.bot_token.strip():
             raise RuntimeError("BOT_TOKEN is required to start the Telegram bot.")
@@ -124,14 +124,16 @@ async def run_bot() -> None:
             default=DefaultBotProperties(parse_mode=ParseMode.HTML),
         )
         dp = build_dispatcher()
-        worker = asyncio.create_task(alert_loop(bot))
+        alert_worker = asyncio.create_task(alert_loop(bot))
+        news_worker = asyncio.create_task(run_news_feed())
         await dp.start_polling(bot)
     finally:
-        if worker is not None:
-            worker.cancel()
+        for task in (alert_worker, news_worker):
+            if task is not None:
+                task.cancel()
         db_task.cancel()
         health_server.cancel()
-        tasks = [task for task in (worker, db_task, health_server) if task is not None]
+        tasks = [task for task in (alert_worker, news_worker, db_task, health_server) if task is not None]
         await asyncio.gather(*tasks, return_exceptions=True)
         if bot is not None:
             await bot.session.close()
