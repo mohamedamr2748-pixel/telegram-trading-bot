@@ -94,8 +94,11 @@ async def alert_loop(bot: Bot) -> None:
 
 
 async def run_news_feed() -> None:
-    worker = NewsFeedWorker(settings.scanner_symbols, settings.news_poll_seconds)
-    await worker.run()
+    worker = NewsFeedWorker(settings.news_feed_symbols)
+    try:
+        await worker.run()
+    finally:
+        await worker.close()
 
 
 async def run_health_server() -> None:
