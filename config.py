@@ -9,7 +9,6 @@ class Settings(BaseSettings):
     gdelt_base_url: str = "https://api.gdeltproject.org/api/v2/doc/doc"
     rss_feeds: str = ""
     scanner_universe: str = "AAPL,MSFT,NVDA,AMZN,META,TSLA,GOOGL,GOOG,AVGO,AMD,PLTR,COIN,INTC,JPM,SPY,QQQ,IWM"
-    news_feed_universe: str = "AAPL,MSFT,NVDA,AMZN,META,TSLA,GOOGL,GOOG,AVGO,AMD,PLTR,COIN,INTC,JPM,SPY,QQQ,IWM,BTCUSD,ETHUSD,XAUUSD,EURUSD,GBPUSD,USDJPY"
     yfinance_enabled: bool = True
     biquote_enabled: bool = True
     google_finance_enabled: bool = False
@@ -27,10 +26,6 @@ class Settings(BaseSettings):
     @property
     def scanner_symbols(self) -> list[str]:
         return [s.strip().upper() for s in self.scanner_universe.split(",") if s.strip()]
-
-    @property
-    def news_feed_symbols(self) -> list[str]:
-        return [s.strip().upper() for s in self.news_feed_universe.split(",") if s.strip()]
 
     @property
     def rss_urls(self) -> list[str]:

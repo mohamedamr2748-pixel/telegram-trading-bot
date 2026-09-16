@@ -28,7 +28,6 @@ class Base(DeclarativeBase):
 class User(Base):
     __tablename__ = "users"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    # Telegram user/chat IDs can exceed PostgreSQL's 32-bit INTEGER range.
     telegram_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
     username: Mapped[str | None] = mapped_column(String(255), nullable=True)
     plan: Mapped[str] = mapped_column(String(32), default="free")
@@ -61,7 +60,7 @@ class Alert(Base):
     alert_type: Mapped[str] = mapped_column(String(32), default="price")
     condition: Mapped[str] = mapped_column(String(32))
     threshold: Mapped[float | None] = mapped_column(nullable=True)
-    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    active: Mapped[bool] = mapped_column(default=True, index=True)
     last_triggered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
@@ -82,6 +81,13 @@ class NewsAsset(Base):
     news_id: Mapped[int] = mapped_column(ForeignKey("news.id", ondelete="CASCADE"), index=True)
     symbol: Mapped[str] = mapped_column(String(64), index=True)
     __table_args__ = (UniqueConstraint("news_id", "symbol", name="uq_news_asset"),)
+
+
+class NewsDemand(Base):
+    __tablename__ = "news_demand"
+    symbol: Mapped[str] = mapped_column(String(64), primary_key=True)
+    last_requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    last_fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class MarketSnapshot(Base):
@@ -112,8 +118,6 @@ async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         if conn.dialect.name == "postgresql":
-            # Existing deployments may have created this column as INTEGER.
-            # Widen it in-place so real Telegram IDs are accepted.
             await conn.execute(text("ALTER TABLE users ALTER COLUMN telegram_id TYPE BIGINT"))
 
 
@@ -135,11 +139,7 @@ async def get_or_create_user(session: AsyncSession, telegram_id: int, username: 
             await session.commit()
         return user
 
-    user = User(
-        telegram_id=telegram_id,
-        username=username,
-        plan=OWNER_PLAN if is_owner else "free",
-    )
+    user = User(telegram_id=telegram_id, username=username, plan=OWNER_PLAN if is_owner else "free")
     session.add(user)
     await session.flush()
     session.add(Watchlist(user_id=user.id, name="My Watchlist"))

@@ -94,7 +94,7 @@ async def alert_loop(bot: Bot) -> None:
 
 
 async def run_news_feed() -> None:
-    worker = NewsFeedWorker(settings.news_feed_symbols)
+    worker = NewsFeedWorker()
     try:
         await worker.run()
     finally:
@@ -102,12 +102,7 @@ async def run_news_feed() -> None:
 
 
 async def run_health_server() -> None:
-    config = uvicorn.Config(
-        app,
-        host="0.0.0.0",
-        port=settings.port,
-        log_level=settings.log_level.lower(),
-    )
+    config = uvicorn.Config(app, host="0.0.0.0", port=settings.port, log_level=settings.log_level.lower())
     server = uvicorn.Server(config)
     await server.serve()
 
@@ -122,11 +117,11 @@ async def run_bot() -> None:
         if not settings.bot_token.strip():
             raise RuntimeError("BOT_TOKEN is required to start the Telegram bot.")
 
-        bot = Bot(
-            token=settings.bot_token,
-            default=DefaultBotProperties(parse_mode=ParseMode.HTML),
-        )
+        bot = Bot(token=settings.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
         dp = build_dispatcher()
+
+        # Do not start database-dependent workers until initialization succeeds.
+        await db_task
         alert_worker = asyncio.create_task(alert_loop(bot))
         news_worker = asyncio.create_task(run_news_feed())
         await dp.start_polling(bot)
@@ -134,7 +129,8 @@ async def run_bot() -> None:
         for task in (alert_worker, news_worker):
             if task is not None:
                 task.cancel()
-        db_task.cancel()
+        if not db_task.done():
+            db_task.cancel()
         health_server.cancel()
         tasks = [task for task in (alert_worker, news_worker, db_task, health_server) if task is not None]
         await asyncio.gather(*tasks, return_exceptions=True)

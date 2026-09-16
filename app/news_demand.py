@@ -1,69 +1,63 @@
 from __future__ import annotations
 
-import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-from redis.asyncio import Redis
+from sqlalchemy import delete, select
 
-from config import settings
+from app.db import NewsDemand, session_factory
 
-DEMAND_KEY = "news:demand:last_requested"
-FETCH_KEY = "news:demand:last_fetched"
+INACTIVE_HOURS = 24
+
+
+def _normalise(symbol: str) -> str:
+    return symbol.strip().upper()
 
 
 class NewsDemandTracker:
-    """Tracks ticker demand only; it deliberately stores no user identifiers."""
-
-    def __init__(self) -> None:
-        self._redis: Redis | None = None
-
-    async def _client(self) -> Redis | None:
-        if not settings.redis_url:
-            return None
-        if self._redis is None:
-            self._redis = Redis.from_url(settings.redis_url, decode_responses=True)
-        return self._redis
+    """Stores aggregate ticker demand only; never stores Telegram identity data."""
 
     async def mark_requested(self, symbol: str) -> None:
-        redis = await self._client()
-        if redis is None:
-            return
-        await redis.hset(DEMAND_KEY, symbol.strip().upper(), str(int(time.time())))
+        symbol = _normalise(symbol)
+        now = datetime.now(timezone.utc)
+        async with session_factory() as session:
+            row = await session.get(NewsDemand, symbol)
+            if row is None:
+                session.add(NewsDemand(symbol=symbol, last_requested_at=now))
+            else:
+                row.last_requested_at = now
+            await session.commit()
 
     async def mark_fetched(self, symbol: str) -> None:
-        redis = await self._client()
-        if redis is None:
-            return
-        await redis.hset(FETCH_KEY, symbol.strip().upper(), str(int(time.time())))
+        symbol = _normalise(symbol)
+        now = datetime.now(timezone.utc)
+        async with session_factory() as session:
+            row = await session.get(NewsDemand, symbol)
+            if row is not None:
+                row.last_fetched_at = now
+                await session.commit()
 
     async def get_last_requested(self, symbol: str) -> datetime | None:
-        redis = await self._client()
-        if redis is None:
-            return None
-        raw = await redis.hget(DEMAND_KEY, symbol.strip().upper())
-        try:
-            return datetime.fromtimestamp(float(raw), tz=timezone.utc) if raw else None
-        except (TypeError, ValueError, OverflowError):
-            return None
+        async with session_factory() as session:
+            row = await session.get(NewsDemand, _normalise(symbol))
+            return row.last_requested_at if row else None
 
     async def get_last_fetched(self, symbol: str) -> datetime | None:
-        redis = await self._client()
-        if redis is None:
-            return None
-        raw = await redis.hget(FETCH_KEY, symbol.strip().upper())
-        try:
-            return datetime.fromtimestamp(float(raw), tz=timezone.utc) if raw else None
-        except (TypeError, ValueError, OverflowError):
-            return None
+        async with session_factory() as session:
+            row = await session.get(NewsDemand, _normalise(symbol))
+            return row.last_fetched_at if row else None
 
     async def symbols(self) -> list[str]:
-        redis = await self._client()
-        if redis is None:
-            return []
-        values = await redis.hkeys(DEMAND_KEY)
-        return [str(symbol).upper() for symbol in values]
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=INACTIVE_HOURS)
+        async with session_factory() as session:
+            result = await session.scalars(select(NewsDemand.symbol).where(NewsDemand.last_requested_at >= cutoff))
+            return [str(symbol).upper() for symbol in result]
+
+    async def prune_inactive(self) -> int:
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=INACTIVE_HOURS)
+        async with session_factory() as session:
+            result = await session.execute(delete(NewsDemand).where(NewsDemand.last_requested_at < cutoff))
+            await session.commit()
+            return int(result.rowcount or 0)
 
     async def close(self) -> None:
-        if self._redis is not None:
-            await self._redis.aclose()
-            self._redis = None
+        return None

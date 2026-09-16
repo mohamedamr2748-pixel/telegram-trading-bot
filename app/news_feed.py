@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 import feedparser
 import httpx
-from sqlalchemy import select, text
+from sqlalchemy import select
 
 from app.db import NewsAsset, NewsItem, engine, session_factory
 from app.domain import NewsItemDTO
@@ -25,6 +25,16 @@ ACTIVE_POLL_MINUTES = 15
 ACTIVE_POLL_OFF_HOURS_MINUTES = 30
 NORMAL_POLL_HOURS = 2
 MARKET_TZ = ZoneInfo("America/New_York")
+
+SPECIAL_QUERIES = {
+    "BTC-USD": "Bitcoin crypto cryptocurrency",
+    "ETH-USD": "Ethereum crypto cryptocurrency",
+    "GC=F": "gold futures gold prices",
+    "EURUSD=X": "EUR USD euro dollar forex",
+    "GBPUSD=X": "GBP USD pound dollar forex",
+    "JPY=X": "JPY USD yen dollar forex",
+}
+NON_US_EQUITIES = {"BTC-USD", "ETH-USD", "GC=F", "EURUSD=X", "GBPUSD=X", "JPY=X", "BTCUSD", "ETHUSD", "XAUUSD", "EURUSD", "GBPUSD", "USDJPY"}
 
 
 def _normalise_symbol(symbol: str) -> str:
@@ -50,12 +60,12 @@ def _published_at(entry: object) -> datetime | None:
 
 
 def _google_news_url(symbol: str) -> str:
-    query = quote_plus(f'"{symbol}" stock OR shares')
-    return f"https://news.google.com/rss/search?q={query}&hl=en-US&gl=US&ceid=US:en"
+    query = SPECIAL_QUERIES.get(symbol, f'"{symbol}" stock OR shares')
+    return f"https://news.google.com/rss/search?q={quote_plus(query)}&hl=en-US&gl=US&ceid=US:en"
 
 
 def _is_us_equity(symbol: str) -> bool:
-    return symbol not in {"BTCUSD", "ETHUSD", "XAUUSD", "EURUSD", "GBPUSD", "USDJPY"}
+    return symbol not in NON_US_EQUITIES
 
 
 def _is_regular_market_hours(now: datetime | None = None) -> bool:
@@ -86,52 +96,40 @@ class GoogleNewsFeed:
 
 
 async def store_news(items: list[NewsItemDTO]) -> int:
-    if not items:
-        return 0
     inserted = 0
+    if not items:
+        return inserted
     async with session_factory() as session:
         for item in items:
             canonical = _canonical_url(item.url)
             existing = await session.scalar(select(NewsItem).where(NewsItem.canonical_url == canonical))
             if existing is None:
-                row = NewsItem(canonical_url=canonical, title=item.title, source=item.source, published_at=item.published_at)
-                session.add(row)
+                existing = NewsItem(canonical_url=canonical, title=item.title, source=item.source, published_at=item.published_at, relevance=item.relevance, urgency=item.urgency)
+                session.add(existing)
                 await session.flush()
-                session.add(NewsAsset(news_id=row.id, symbol=item.symbol))
                 inserted += 1
-            else:
-                asset = await session.scalar(select(NewsAsset).where(NewsAsset.news_id == existing.id, NewsAsset.symbol == item.symbol))
-                if asset is None:
-                    session.add(NewsAsset(news_id=existing.id, symbol=item.symbol))
+            asset = await session.scalar(select(NewsAsset).where(NewsAsset.news_id == existing.id, NewsAsset.symbol == item.symbol))
+            if asset is None:
+                session.add(NewsAsset(news_id=existing.id, symbol=item.symbol))
         await session.commit()
     return inserted
 
 
 async def cleanup_old_news(hours: int = RETENTION_HOURS) -> None:
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
-    async with engine.begin() as conn:
-        await conn.execute(
-            text("DELETE FROM news_assets WHERE news_id IN (SELECT id FROM news WHERE published_at IS NOT NULL AND published_at < :cutoff)"),
-            {"cutoff": cutoff},
-        )
-        await conn.execute(
-            text("DELETE FROM news WHERE published_at IS NOT NULL AND published_at < :cutoff"),
-            {"cutoff": cutoff},
-        )
+    async with session_factory() as session:
+        old_ids = select(NewsItem.id).where(NewsItem.published_at.is_not(None), NewsItem.published_at < cutoff)
+        await session.execute(NewsAsset.__table__.delete().where(NewsAsset.news_id.in_(old_ids)))
+        await session.execute(NewsItem.__table__.delete().where(NewsItem.published_at.is_not(None), NewsItem.published_at < cutoff))
+        await session.commit()
 
 
 class NewsFeedWorker:
-    """Adaptive ticker collector: active -> 15/30m, normal -> 2h, dormant -> off."""
+    """Background-only news collector with adaptive ticker polling."""
 
-    def __init__(self, candidate_symbols: list[str]) -> None:
-        self.candidate_symbols = {_normalise_symbol(s) for s in candidate_symbols if s.strip()}
+    def __init__(self) -> None:
         self.provider = GoogleNewsFeed()
         self.demand = NewsDemandTracker()
-
-    async def _tracked_symbols(self) -> list[str]:
-        # Candidate tickers are known up front, but are fetched only after
-        # aggregate demand exists. /news can dynamically add any valid ticker.
-        return sorted(self.candidate_symbols | set(await self.demand.symbols()))
 
     async def _interval_seconds(self, symbol: str, now: datetime) -> int | None:
         last_requested = await self.demand.get_last_requested(symbol)
@@ -139,9 +137,7 @@ class NewsFeedWorker:
             return None
         age_hours = max(0.0, (now - last_requested).total_seconds() / 3600)
         if age_hours <= ACTIVE_HOURS:
-            if _is_us_equity(symbol) and _is_regular_market_hours(now):
-                return ACTIVE_POLL_MINUTES * 60
-            return ACTIVE_POLL_OFF_HOURS_MINUTES * 60
+            return ACTIVE_POLL_MINUTES * 60 if _is_us_equity(symbol) and _is_regular_market_hours(now) else ACTIVE_POLL_OFF_HOURS_MINUTES * 60
         if age_hours <= NORMAL_HOURS:
             return NORMAL_POLL_HOURS * 3600
         return None
@@ -151,13 +147,10 @@ class NewsFeedWorker:
         if interval is None:
             return False
         last_fetched = await self.demand.get_last_fetched(symbol)
-        if last_fetched is None:
-            return True
-        return (now - last_fetched).total_seconds() >= interval
+        return last_fetched is None or (now - last_fetched).total_seconds() >= interval
 
     async def _refresh_symbol(self, symbol: str) -> None:
-        now = datetime.now(timezone.utc)
-        if not await self._is_due(symbol, now):
+        if not await self._is_due(symbol, datetime.now(timezone.utc)):
             return
         try:
             items = await self.provider.fetch(symbol)
@@ -170,8 +163,8 @@ class NewsFeedWorker:
     async def run(self) -> None:
         while True:
             try:
-                symbols = await self._tracked_symbols()
-                for symbol in symbols:
+                await self.demand.prune_inactive()
+                for symbol in await self.demand.symbols():
                     await self._refresh_symbol(symbol)
                 await cleanup_old_news()
             except asyncio.CancelledError:
