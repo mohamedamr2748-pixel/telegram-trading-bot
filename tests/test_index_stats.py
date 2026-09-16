@@ -28,9 +28,9 @@ def test_index_rows_use_data_instead_of_stock_only_n_a_fields():
     assert rows[0] == [
         ("Open", "7,612"),
         ("Volume", "1.23B"),
-        ("Previous", "7,620.00"),
+        ("Previous", "7,620"),
     ]
-    assert rows[1][1] == ("52-wk high", "7,817.00")
+    assert rows[1][1] == ("52-wk high", "7,817")
     assert rows[2] == [
         ("Low", "7,573"),
         ("Day change", "-0.51%"),
