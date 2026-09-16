@@ -16,7 +16,8 @@ class Settings(BaseSettings):
     google_finance_api_key: str = ""
     market_poll_seconds: int = 30
     alert_poll_seconds: int = 15
-    news_poll_seconds: int = 120
+    news_poll_seconds: int = 2 * 60 * 60
+    purge_market_cache_on_startup: bool = False
     port: int = 8080
     log_level: str = "INFO"
 
