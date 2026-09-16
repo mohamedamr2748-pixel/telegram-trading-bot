@@ -36,6 +36,30 @@ charts_module._configure_us_equity_x_axis = configure_observed_bounds
 from app.index_stats import install as install_index_stats
 install_index_stats(charts_module)
 
+# Keep provider/canonical symbols internal; charts use friendly index names.
+from app.chart_display_symbols import chart_display_symbol
+_original_render_chart = bot_module.render_chart
+
+
+async def _render_chart_with_friendly_symbol(
+    df,
+    symbol,
+    timeframe,
+    advanced=False,
+    **kwargs,
+):
+    display_symbol = chart_display_symbol(symbol)
+    return await _original_render_chart(
+        df,
+        display_symbol,
+        timeframe,
+        advanced=advanced,
+        **kwargs,
+    )
+
+
+bot_module.render_chart = _render_chart_with_friendly_symbol
+
 from app.market_dashboard import install as install_market_dashboard
 install_market_dashboard(bot_module)
 
