@@ -9,64 +9,93 @@ permissions:
 
 jobs:
   apply:
-    if: ${{ !contains(github.event.head_commit.message, 'Apply chart timestamp fix') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Patch files
+      - name: Patch only chart timestamp files
         shell: bash
         run: |
           python - <<'PY'
           from pathlib import Path
+          import re
 
-          chart = Path('app/charts.py')
+          chart = Path("app/charts.py")
           text = chart.read_text()
 
-          old_import = '''import io\n\nimport matplotlib\nmatplotlib.use("Agg")\nimport matplotlib.dates as mdates\nimport matplotlib.pyplot as plt\nimport mplfinance as mpf\nimport pandas as pd\nfrom matplotlib.patches import FancyBboxPatch\n'''
-          new_import = '''import io\nimport re\n\nimport matplotlib\nmatplotlib.use("Agg")\nimport matplotlib.dates as mdates\nimport matplotlib.pyplot as plt\nimport mplfinance as mpf\nimport pandas as pd\nfrom matplotlib.patches import FancyBboxPatch\nfrom matplotlib.ticker import FixedFormatter, FixedLocator\n'''
-          if old_import not in text:
-              raise SystemExit('charts.py import marker not found')
-          text = text.replace(old_import, new_import, 1)
+          # 1) Imports used by the timestamp implementation.
+          text = text.replace(
+              "import io\n\nimport matplotlib\n",
+              "import io\nimport re\n\nimport matplotlib\n",
+              1,
+          )
+          text = text.replace(
+              "from matplotlib.patches import FancyBboxPatch\n",
+              "from matplotlib.patches import FancyBboxPatch\nfrom matplotlib.ticker import FixedFormatter, FixedLocator\n",
+              1,
+          )
 
-          old_constants = '''_REGULAR_GREEN = "#55e982"\n_REGULAR_RED = "#f26b63"\n\n_CHART_STYLE = mpf.make_mpf_style(\n'''
-          new_constants = '''_REGULAR_GREEN = "#55e982"\n_REGULAR_RED = "#f26b63"\n\n_TIMEFRAME_RE = re.compile(r"^(?P<count>\\d+)(?P<unit>mo|wk|w|d|h|m)$", re.IGNORECASE)\n\n_CHART_STYLE = mpf.make_mpf_style(\n'''
-          if old_constants not in text:
-              raise SystemExit('charts.py constant marker not found')
-          text = text.replace(old_constants, new_constants, 1)
+          # 2) Timestamp interval parser regex.
+          marker = '_REGULAR_RED = "#f26b63"\n'
+          if "_TIMEFRAME_RE = re.compile" not in text:
+              if marker not in text:
+                  raise SystemExit("timestamp constant marker not found")
+              text = text.replace(
+                  marker,
+                  marker + '\n_TIMEFRAME_RE = re.compile(r"^(?P<count>\\d+)(?P<unit>mo|wk|w|d|h|m)$", re.IGNORECASE)\n',
+                  1,
+              )
 
-          old_axis = '''def _configure_price_x_axis(ax, timeframe: str, index: pd.DatetimeIndex) -> None:\n    """Configure X-axis labels from the candle timeframe, not from a hard-coded format.\n\n    Price buttons represent candle intervals:\n      1M/5M/15M/30M/1H/4H -> intraday timestamps\n      1D/1W              -> date timestamps\n      1MO                -> month/year timestamps\n    All labels are UTC to match the rest of the price card.\n    """\n    key = _timeframe_key(timeframe)\n    timestamps = pd.DatetimeIndex(index)\n    if len(timestamps) == 0:\n        return\n    if timestamps.tz is None:\n        timestamps = timestamps.tz_localize(UTC)\n    else:\n        timestamps = timestamps.tz_convert(UTC)\n\n    x_min = timestamps[0]\n    x_max = timestamps[-1]\n    if x_max <= x_min:\n        x_max = x_min + pd.Timedelta(minutes=30)\n    ax.set_xlim(x_min.to_pydatetime(), x_max.to_pydatetime())\n\n    locator = mdates.AutoDateLocator(minticks=4, maxticks=6, interval_multiples=True)\n    ax.xaxis.set_major_locator(locator)\n    if key == "1M":\n        fmt = "%H:%M"\n    elif key in {"5M", "15M", "30M", "1H", "4H"}:\n        fmt = "%d %b\\n%H:%M"\n    elif key in {"1D", "1W"}:\n        fmt = "%d %b"\n    elif key == "1MO":\n        fmt = "%b %Y"\n    else:\n        fmt = "%d %b\\n%H:%M"\n    ax.xaxis.set_major_formatter(mdates.DateFormatter(fmt, tz=UTC))\n    ax.xaxis.get_offset_text().set_visible(False)\n\n\n'''
-          new_axis = '''def _timeframe_interval(timeframe: str) -> tuple[int, str]:\n    parts = [part.strip().lower() for part in timeframe.split("/") if part.strip()]\n    for raw_interval in reversed(parts):\n        match = _TIMEFRAME_RE.fullmatch(raw_interval)\n        if match is not None:\n            return int(match.group("count")), match.group("unit")\n    return 1, "d"\n\n\ndef _timestamp_tick_step(timeframe: str, span: pd.Timedelta) -> pd.Timedelta:\n    count, unit = _timeframe_interval(timeframe)\n    base_seconds = count * {\n        "m": 60,\n        "h": 60 * 60,\n        "d": 24 * 60 * 60,\n        "w": 7 * 24 * 60 * 60,\n        "wk": 7 * 24 * 60 * 60,\n        "mo": 30 * 24 * 60 * 60,\n    }[unit]\n    multiples = {\n        "m": (1, 2, 3, 5, 10, 15, 30, 60, 120, 240, 360, 720, 1440),\n        "h": (1, 2, 3, 4, 6, 8, 12, 24, 48, 72, 168),\n        "d": (1, 2, 3, 5, 7, 14, 30, 60, 90, 180, 365),\n        "w": (1, 2, 4, 8, 13, 26, 52),\n        "wk": (1, 2, 4, 8, 13, 26, 52),\n        "mo": (1, 2, 3, 6, 12),\n    }[unit]\n    span_seconds = max(span.total_seconds(), 0.0)\n    multiple = next((value for value in multiples if span_seconds / (base_seconds * value) <= 8), multiples[-1])\n    return pd.Timedelta(seconds=base_seconds * multiple)\n\n\ndef _observed_timestamp_ticks(index: pd.DatetimeIndex, timeframe: str) -> pd.DatetimeIndex:\n    observed = _display_index(index, "")\n    if not len(observed):\n        return observed\n    observed = observed.drop_duplicates().sort_values()\n    step = _timestamp_tick_step(timeframe, observed[-1] - observed[0])\n    ticks = [observed[0]]\n    next_target = observed[0] + step\n    for timestamp in observed[1:]:\n        if timestamp >= next_target:\n            ticks.append(timestamp)\n            next_target = timestamp + step\n    if ticks[-1] != observed[-1]:\n        ticks.append(observed[-1])\n    return pd.DatetimeIndex(ticks)\n\n\ndef _timestamp_tick_labels(ticks: pd.DatetimeIndex, timeframe: str) -> list[str]:\n    if len(ticks) <= 1:\n        return [ticks[0].strftime("%H:%M")] if len(ticks) else []\n    count, unit = _timeframe_interval(timeframe)\n    span = ticks[-1] - ticks[0]\n    if unit in {"m", "h"}:\n        date_format = "%d %b\\n%H:%M" if span >= pd.Timedelta(days=2) else "%H:%M"\n    elif unit == "mo":\n        date_format = "%b %Y"\n    else:\n        date_format = "%b %Y" if span >= pd.Timedelta(days=365) else "%d %b"\n    return [timestamp.strftime(date_format) for timestamp in ticks]\n\n\ndef _configure_observed_timestamp_ticks(\n    ax,\n    index: pd.DatetimeIndex,\n    timeframe: str,\n    visible_bounds: tuple[pd.Timestamp, pd.Timestamp] | None = None,\n) -> None:\n    observed = _display_index(index, "")\n    if visible_bounds is not None:\n        lower, upper = visible_bounds\n        observed = observed[(observed >= lower) & (observed <= upper)]\n    ticks = _observed_timestamp_ticks(observed, timeframe)\n    if not len(ticks):\n        return\n    positions = mdates.date2num(ticks.to_pydatetime())\n    labels = _timestamp_tick_labels(ticks, timeframe)\n    ax.xaxis.set_major_locator(FixedLocator(positions))\n    ax.xaxis.set_major_formatter(FixedFormatter(labels))\n    ax.xaxis.get_offset_text().set_visible(False)\n\n\n'''
-          if old_axis not in text:
-              raise SystemExit('charts.py old axis block not found')
-          text = text.replace(old_axis, new_axis, 1)
+          # 3) Production /price 1D/chart is a daily price chart, while the
+          # standalone /chart 1d/15m path remains session-intraday.
+          old_session = '''def _is_session_intraday_chart(timeframe: str) -> bool:\n    """Only the standalone /chart one-day intraday view uses session framing."""\n    raw = timeframe.split("/", 1)\n    if len(raw) != 2:\n        return False\n    return raw[0].strip().lower() == "1d"\n'''
+          new_session = '''def _is_session_intraday_chart(timeframe: str) -> bool:\n    """Only the standalone /chart one-day intraday view uses session framing."""\n    raw = timeframe.split("/", 1)\n    if len(raw) != 2:\n        return False\n    return raw[0].strip().lower() == "1d" and raw[1].strip().lower() != "chart"\n'''
+          if old_session not in text:
+              raise SystemExit("session helper block not found")
+          text = text.replace(old_session, new_session, 1)
 
-          old_render_axis = '''    if frame is not None:\n        _configure_us_equity_x_axis(ax, frame)\n    else:\n        _configure_price_x_axis(ax, timeframe_key, work.index)\n'''
-          new_render_axis = '''    if frame is not None:\n        _configure_us_equity_x_axis(ax, frame)\n        _configure_observed_timestamp_ticks(\n            ax,\n            work.index,\n            timeframe,\n            visible_bounds=(frame.x_min_utc, frame.x_max_utc),\n        )\n    else:\n        x = work.index.to_pydatetime()\n        if len(x) > 1:\n            ax.set_xlim(x[0], x[-1])\n        _configure_observed_timestamp_ticks(ax, work.index, timeframe)\n'''
-          if old_render_axis not in text:
-              raise SystemExit('charts.py render axis marker not found')
-          text = text.replace(old_render_axis, new_render_axis, 1)
+          # 4) Replace only the generic price-axis formatter with timeframe-aware
+          # observed-timestamp ticks. No price data or chart UI is changed.
+          axis_pattern = re.compile(
+              r"def _configure_price_x_axis\(ax, timeframe: str, index: pd\.DatetimeIndex\) -> None:\n.*?\n\n\nasync def render_google_finance_chart",
+              re.DOTALL,
+          )
+          axis_block = '''def _timeframe_interval(timeframe: str) -> tuple[int, str]:\n    parts = [part.strip().lower() for part in timeframe.split("/") if part.strip()]\n    for raw_interval in reversed(parts):\n        match = _TIMEFRAME_RE.fullmatch(raw_interval)\n        if match is not None:\n            return int(match.group("count")), match.group("unit")\n    return 1, "d"\n\n\ndef _timestamp_tick_step(timeframe: str, span: pd.Timedelta) -> pd.Timedelta:\n    count, unit = _timeframe_interval(timeframe)\n    base_seconds = count * {\n        "m": 60,\n        "h": 60 * 60,\n        "d": 24 * 60 * 60,\n        "w": 7 * 24 * 60 * 60,\n        "wk": 7 * 24 * 60 * 60,\n        "mo": 30 * 24 * 60 * 60,\n    }[unit]\n    multiples = {\n        "m": (1, 2, 3, 5, 10, 15, 30, 60, 120, 240, 360, 720, 1440),\n        "h": (1, 2, 3, 4, 6, 8, 12, 24, 48, 72, 168),\n        "d": (1, 2, 3, 5, 7, 14, 30, 60, 90, 180, 365),\n        "w": (1, 2, 4, 8, 13, 26, 52),\n        "wk": (1, 2, 4, 8, 13, 26, 52),\n        "mo": (1, 2, 3, 6, 12),\n    }[unit]\n    span_seconds = max(span.total_seconds(), 0.0)\n    multiple = next((value for value in multiples if span_seconds / (base_seconds * value) <= 8), multiples[-1])\n    return pd.Timedelta(seconds=base_seconds * multiple)\n\n\ndef _observed_timestamp_ticks(index: pd.DatetimeIndex, timeframe: str) -> pd.DatetimeIndex:\n    observed = _display_index(index, "")\n    if not len(observed):\n        return observed\n    observed = observed.drop_duplicates().sort_values()\n    step = _timestamp_tick_step(timeframe, observed[-1] - observed[0])\n    ticks = [observed[0]]\n    next_target = observed[0] + step\n    for timestamp in observed[1:]:\n        if timestamp >= next_target:\n            ticks.append(timestamp)\n            next_target = timestamp + step\n    if ticks[-1] != observed[-1]:\n        ticks.append(observed[-1])\n    return pd.DatetimeIndex(ticks)\n\n\ndef _timestamp_tick_labels(ticks: pd.DatetimeIndex, timeframe: str) -> list[str]:\n    if len(ticks) <= 1:\n        return [ticks[0].strftime("%H:%M")] if len(ticks) else []\n    count, unit = _timeframe_interval(timeframe)\n    span = ticks[-1] - ticks[0]\n    if unit in {"m", "h"}:\n        date_format = "%d %b\\n%H:%M" if span >= pd.Timedelta(days=2) else "%H:%M"\n    elif unit == "mo":\n        date_format = "%b %Y"\n    else:\n        date_format = "%b %Y" if span >= pd.Timedelta(days=365) else "%d %b"\n    return [timestamp.strftime(date_format) for timestamp in ticks]\n\n\ndef _configure_observed_timestamp_ticks(\n    ax,\n    index: pd.DatetimeIndex,\n    timeframe: str,\n    visible_bounds: tuple[pd.Timestamp, pd.Timestamp] | None = None,\n) -> None:\n    observed = _display_index(index, "")\n    if visible_bounds is not None:\n        lower, upper = visible_bounds\n        observed = observed[(observed >= lower) & (observed <= upper)]\n    ticks = _observed_timestamp_ticks(observed, timeframe)\n    if not len(ticks):\n        return\n    positions = mdates.date2num(ticks.to_pydatetime())\n    labels = _timestamp_tick_labels(ticks, timeframe)\n    ax.xaxis.set_major_locator(FixedLocator(positions))\n    ax.xaxis.set_major_formatter(FixedFormatter(labels))\n    ax.xaxis.get_offset_text().set_visible(False)\n\n\nasync def render_google_finance_chart'''
+          text, count = axis_pattern.subn(axis_block, text, count=1)
+          if count != 1:
+              raise SystemExit("price axis block not found")
+
+          old_render = '''    if frame is not None:\n        _configure_us_equity_x_axis(ax, frame)\n    else:\n        _configure_price_x_axis(ax, timeframe_key, work.index)\n'''
+          new_render = '''    if frame is not None:\n        _configure_us_equity_x_axis(ax, frame)\n        _configure_observed_timestamp_ticks(\n            ax,\n            work.index,\n            timeframe,\n            visible_bounds=(frame.x_min_utc, frame.x_max_utc),\n        )\n    else:\n        x = work.index.to_pydatetime()\n        if len(x) > 1:\n            ax.set_xlim(x[0], x[-1])\n        _configure_observed_timestamp_ticks(ax, work.index, timeframe)\n'''
+          if old_render not in text:
+              raise SystemExit("render axis block not found")
+          text = text.replace(old_render, new_render, 1)
           chart.write_text(text)
 
-          tests = Path('tests/test_charts.py')
+          # 5) Add focused tests for production timeframe strings and timestamp semantics.
+          tests = Path("tests/test_charts.py")
           test_text = tests.read_text()
-          marker = '\n\n@pytest.mark.asyncio\nasync def test_regular_session_performance_ignores_extended_hours_movement():'
+          marker = '''\n\n@pytest.mark.asyncio\nasync def test_regular_session_performance_ignores_extended_hours_movement():'''
           additions = '''\n\n@pytest.mark.parametrize(\n    ("timeframe", "expected"),\n    [\n        ("1M/chart", (1, "m")),\n        ("5M/chart", (5, "m")),\n        ("15M/chart", (15, "m")),\n        ("30M/chart", (30, "m")),\n        ("1H/chart", (1, "h")),\n        ("4H/chart", (4, "h")),\n        ("1D/chart", (1, "d")),\n        ("1W/chart", (1, "w")),\n        ("1MO/chart", (1, "mo")),\n        ("1mo/5m", (5, "m")),\n        ("1y/4h", (4, "h")),\n    ],\n)\ndef test_timeframe_interval_parses_production_and_legacy_chart_values(timeframe, expected):\n    assert charts._timeframe_interval(timeframe) == expected\n\n\n@pytest.mark.parametrize(\n    ("timeframe", "frequency", "periods", "maximum_tick_gap"),\n    [\n        ("5M/chart", "5min", 120, pd.Timedelta(hours=3)),\n        ("4H/chart", "4h", 120, pd.Timedelta(days=5)),\n    ],\n)\ndef test_timestamp_ticks_follow_intraday_candle_intervals(timeframe, frequency, periods, maximum_tick_gap):\n    idx = pd.date_range("2026-09-01 00:00", periods=periods, freq=frequency, tz="UTC")\n    fig, ax = plt.subplots()\n\n    charts._configure_observed_timestamp_ticks(ax, idx, timeframe)\n\n    tick_positions = ax.xaxis.get_majorticklocs()\n    tick_times = pd.to_datetime(mdates.num2date(tick_positions), utc=True)\n    assert set(tick_times).issubset(set(idx))\n    assert 5 <= len(tick_times) <= 9\n    assert tick_times.to_series().diff().iloc[1:].max() <= maximum_tick_gap\n    plt.close(fig)\n\n\n@pytest.mark.parametrize(\n    ("timeframe", "frequency", "periods", "expected_label"),\n    [\n        ("1D/chart", "1D", 31, "01 Jan"),\n        ("1W/chart", "7D", 12, "Jan"),\n        ("1MO/chart", "30D", 12, "2026"),\n    ],\n)\ndef test_timestamp_ticks_use_daily_weekly_monthly_label_semantics(timeframe, frequency, periods, expected_label):\n    idx = pd.date_range("2026-01-01", periods=periods, freq=frequency, tz="UTC")\n    fig, ax = plt.subplots()\n\n    charts._configure_observed_timestamp_ticks(ax, idx, timeframe)\n\n    labels = [label.get_text() for label in ax.get_xticklabels()]\n    assert labels\n    assert any(expected_label in label for label in labels)\n    assert len(labels) <= 9\n    plt.close(fig)\n'''
           if additions.strip() not in test_text:
               if marker not in test_text:
-                  raise SystemExit('tests/test_charts.py insertion marker not found')
+                  raise SystemExit("test insertion marker not found")
               test_text = test_text.replace(marker, additions + marker, 1)
           tests.write_text(test_text)
           PY
 
-      - name: Test
-        run: python -m compileall -q app tests && pytest -q
+      - name: Verify
+        env:
+          PYTHONPATH: .
+          BOT_TOKEN: test-token
+        run: python -m compileall -q . && pytest -q
 
-      - name: Commit final two-file change only
+      - name: Commit only final source/test files
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           rm -f .github/workflows/apply_timestamp_fix.yml
-          git add app/charts.py tests/test_charts.py .github/workflows/apply_timestamp_fix.yml
+          git add -A
+          test "$(git diff --cached --name-only)" = $'app/charts.py\ntests/test_charts.py' || { echo "Unexpected files staged:"; git diff --cached --name-only; exit 1; }
           git commit -m 'Fix timeframe-aware chart timestamps'
           git push origin HEAD:main
