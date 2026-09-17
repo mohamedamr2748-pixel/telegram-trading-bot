@@ -30,6 +30,23 @@ for _name, _value in vars(_LEGACY).items():
         globals().setdefault(_name, _value)
 
 
+def _call_legacy(function_name: str, *args, **kwargs):
+    """Call a legacy async renderer while honouring package-level monkeypatches."""
+    function = getattr(_LEGACY, function_name)
+    overridden = []
+    for name in ("_plot_session_coloured_line", "_configure_us_equity_x_axis"):
+        package_value = globals().get(name)
+        legacy_value = getattr(_LEGACY, name, None)
+        if package_value is not None and package_value is not legacy_value:
+            overridden.append((name, legacy_value))
+            setattr(_LEGACY, name, package_value)
+    try:
+        return function(*args, **kwargs)
+    finally:
+        for name, legacy_value in overridden:
+            setattr(_LEGACY, name, legacy_value)
+
+
 def _render_price_chart(
     df: pd.DataFrame,
     symbol: str,
@@ -292,9 +309,10 @@ async def render_google_finance_chart(
     change_percent: float | None = None,
     quote: MarketQuote | None = None,
 ):
-    """Compatibility wrapper: session /chart keeps the legacy renderer; price charts use the new timestamp engine."""
+    """Compatibility wrapper: /chart keeps the legacy session renderer; price charts use the new timestamp engine."""
     if _LEGACY._is_session_intraday_chart(timeframe):
-        return await _LEGACY.render_google_finance_chart(
+        return await _call_legacy(
+            "render_google_finance_chart",
             df,
             symbol,
             timeframe,
@@ -335,7 +353,8 @@ async def render_chart(
     existing implementation.
     """
     if advanced or _LEGACY._is_session_intraday_chart(timeframe):
-        return await _LEGACY.render_chart(
+        return await _call_legacy(
+            "render_chart",
             df,
             symbol,
             timeframe,
