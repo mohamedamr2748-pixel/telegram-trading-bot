@@ -5,6 +5,7 @@ from typing import Literal
 from zoneinfo import ZoneInfo
 
 import matplotlib.dates as mdates
+import matplotlib.ticker as mticker
 import pandas as pd
 
 UTC = ZoneInfo("UTC")
@@ -98,7 +99,7 @@ def configure_price_x_axis(ax, timeframe: str, index: pd.DatetimeIndex) -> None:
 
     ax.set_xlim(x_min.to_pydatetime(), x_max.to_pydatetime())
     ticks = _tick_positions(timestamps, rule.tick_count)
-    ax.xaxis.set_major_locator(mdates.FixedLocator(mdates.date2num(ticks.to_pydatetime())))
+    ax.xaxis.set_major_locator(mticker.FixedLocator(mdates.date2num(ticks.to_pydatetime())))
     ax.xaxis.set_major_formatter(mdates.DateFormatter(_format_for(rule, timestamps), tz=UTC))
     ax.xaxis.get_offset_text().set_visible(False)
     ax.tick_params(axis="x", pad=8, length=0)
