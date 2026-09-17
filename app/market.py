@@ -367,10 +367,8 @@ class YFinanceProvider(MarketProvider):
             yf_symbol = self._history_symbol(symbol)
             ticker = yf.Ticker(yf_symbol)
             history_kwargs = {"period": period, "interval": interval, "auto_adjust": False}
-            # Extended-hours data is requested for stocks only. Broad-market
-            # indices must not use prepost because Yahoo may reject it.
-            if interval.endswith(("m", "h")) and self._classify(symbol) == "stock" and not inverse:
-                history_kwargs["prepost"] = True
+            # Standard /price intraday charts use regular-session candles only.
+            # Quote data continues to expose pre/post-market prices separately.
             df = ticker.history(**history_kwargs)
 
             # Broad-market indices can intermittently return only one intraday
