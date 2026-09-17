@@ -1,0 +1,180 @@
+name: Apply candlestick chart migration via issue
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  apply:
+    if: ${{ github.event.issue.title == 'APPLY-CANDLESTICK-CHART' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Patch standard price chart
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path("app/charts.py")
+          text = path.read_text(encoding="utf-8")
+
+          if "def _plot_ohlc_candles(" in text:
+              print("Candlestick migration already applied; nothing to do.")
+              raise SystemExit(0)
+
+          text = text.replace(
+              "from matplotlib.patches import FancyBboxPatch",
+              "from matplotlib.patches import FancyBboxPatch, Rectangle",
+              1,
+          )
+          text = text.replace(
+              '_REGULAR_RED = "#f26b63"',
+              '_REGULAR_RED = "#f26b63"\n_CANDLE_UP = "#55e982"\n_CANDLE_DOWN = "#f26b63"',
+              1,
+          )
+
+          timestamp_block = '''def _observed_timestamp_ticks(index: pd.DatetimeIndex, timeframe: str) -> pd.DatetimeIndex:
+              observed = _display_index(index, "")
+              if not len(observed):
+                  return observed
+              observed = observed.drop_duplicates().sort_values()
+              count, unit = _timeframe_interval(timeframe)
+              if count == 4 and unit == "h":
+                  aligned = observed[
+                      (observed.minute == 0)
+                      & (observed.second == 0)
+                      & (observed.microsecond == 0)
+                      & ((observed.hour % 4) == 0)
+                  ]
+                  if len(aligned):
+                      observed = aligned
+              step = _timestamp_tick_step(timeframe, observed[-1] - observed[0])
+              ticks = [observed[0]]
+              next_target = observed[0] + step
+              for timestamp in observed[1:]:
+                  if timestamp >= next_target:
+                      ticks.append(timestamp)
+                      next_target = timestamp + step
+              if ticks[-1] != observed[-1]:
+                  ticks.append(observed[-1])
+              return pd.DatetimeIndex(ticks)
+
+
+          '''
+          pattern = re.compile(r"def _observed_timestamp_ticks\(.*?\n\ndef _timestamp_tick_labels", re.DOTALL)
+          text, replaced = pattern.subn(timestamp_block + "def _timestamp_tick_labels", text, count=1)
+          if replaced != 1:
+              raise SystemExit("Could not locate timestamp tick function")
+
+          candle_helpers = '''def _candle_width_days(index: pd.DatetimeIndex, timeframe: str) -> float:
+              count, unit = _timeframe_interval(timeframe)
+              base_days = count * {
+                  "m": 1.0 / (24.0 * 60.0),
+                  "h": 1.0 / 24.0,
+                  "d": 1.0,
+                  "w": 7.0,
+                  "wk": 7.0,
+                  "mo": 30.0,
+              }[unit]
+              if len(index) > 1:
+                  values = pd.DatetimeIndex(index).asi8
+                  gaps = (values[1:] - values[:-1]) / 86_400_000_000_000
+                  positive = gaps[gaps > 0]
+                  if len(positive):
+                      base_days = min(base_days, float(pd.Series(positive).median()))
+              return max(base_days * 0.72, 1.0 / (24.0 * 60.0) * 0.55)
+
+
+          def _plot_ohlc_candles(ax, work: pd.DataFrame, timeframe: str) -> None:
+              required = {"Open", "High", "Low", "Close"}
+              if not required.issubset(work.columns):
+                  x = work.index.to_pydatetime()
+                  y = pd.to_numeric(work["Close"], errors="coerce").to_numpy(dtype=float)
+                  ax.plot(x, y, linewidth=2.35, color=_REGULAR_RED, solid_capstyle="round", solid_joinstyle="round", antialiased=True, zorder=4)
+                  return
+
+              ohlc = work[["Open", "High", "Low", "Close"]].apply(pd.to_numeric, errors="coerce").dropna()
+              if ohlc.empty:
+                  return
+              width = _candle_width_days(ohlc.index, timeframe)
+              x_values = mdates.date2num(ohlc.index.to_pydatetime())
+              for x_value, row in zip(x_values, ohlc.itertuples(index=False)):
+                  opening, high, low, close = map(float, row)
+                  candle_colour = _CANDLE_UP if close >= opening else _CANDLE_DOWN
+                  ax.vlines(x_value, low, high, color=candle_colour, linewidth=1.15, alpha=0.95, zorder=4)
+                  body_bottom = min(opening, close)
+                  body_height = abs(close - opening)
+                  if body_height <= 0:
+                      ax.hlines(close, x_value - width * 0.36, x_value + width * 0.36, color=candle_colour, linewidth=2.2, zorder=5)
+                  else:
+                      body = Rectangle(
+                          (x_value - width / 2.0, body_bottom),
+                          width,
+                          body_height,
+                          facecolor=candle_colour,
+                          edgecolor=candle_colour,
+                          linewidth=0.7,
+                          zorder=5,
+                      )
+                      ax.add_patch(body)
+
+
+          '''
+          marker = "\ndef _configure_us_equity_x_axis(ax, frame: TradingFrame) -> None:"
+          if marker not in text:
+              raise SystemExit("Could not find chart axis helper insertion point")
+          text = text.replace(marker, "\n\n" + candle_helpers + "def _configure_us_equity_x_axis(ax, frame: TradingFrame) -> None:", 1)
+
+          drawing_pattern = re.compile(
+              r"    if frame is not None:\n        _draw_session_bands\(ax, frame, line_color\).*?\n    if previous is not None:",
+              re.DOTALL,
+          )
+          replacement = '''    if frame is not None:
+              _draw_session_bands(ax, frame, line_color)
+          _plot_ohlc_candles(ax, work, timeframe)
+
+          if previous is not None:'''
+          text, drawing_replaced = drawing_pattern.subn(replacement, text, count=1)
+          if drawing_replaced != 1:
+              raise SystemExit("Could not replace standard line renderer")
+
+          path.write_text(text, encoding="utf-8")
+          print("Standard /price chart migrated to OHLC candlesticks.")
+          PY
+
+      - name: Validate Python syntax
+        run: python -m compileall -q app
+
+      - name: Commit migration and close trigger issue
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- app/charts.py; then
+            echo "No code changes to commit."
+          else
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add app/charts.py
+            git commit -m 'Use candlesticks for standard price charts'
+            git push origin HEAD:main
+          fi
+          curl -fsSL -X PATCH \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${REPO}/issues/${ISSUE_NUMBER}" \
+            -d '{"state":"closed"}' >/dev/null
