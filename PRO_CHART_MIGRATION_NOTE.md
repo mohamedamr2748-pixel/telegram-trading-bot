@@ -1,0 +1,1 @@
+Approved professional standard /price chart refinement is being applied without changing the native 4H data routing or other agreed behaviour.
