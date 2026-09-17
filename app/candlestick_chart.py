@@ -41,20 +41,16 @@ def _display_ticks(index: pd.DatetimeIndex, timeframe: str) -> tuple[pd.Datetime
             ticks = pd.DatetimeIndex([observed[position] for position in positions])
 
         if count == 4 and unit == "h":
-            # 4H stock charts are rendered on compact candle slots, so repeated
-            # clock labels from different sessions can become visually confusing.
-            # Keep the candle positions untouched, but choose a label set with
-            # unique clock values whenever the selected ticks permit it.
-            unique_ticks = []
-            seen_labels = set()
-            for timestamp in ticks:
-                label = timestamp.strftime("%H:%M")
-                if label not in seen_labels:
-                    unique_ticks.append(timestamp)
-                    seen_labels.add(label)
-            if len(unique_ticks) >= 4:
-                ticks = pd.DatetimeIndex(unique_ticks)
-            labels = [timestamp.strftime("%H:%M") for timestamp in ticks]
+            # Keep the real 4H candle positions. For session-based instruments
+            # (such as stocks), include the calendar date because the same clock
+            # time occurs on multiple trading days. Continuous 24/7 instruments
+            # keep the cleaner time-only labels.
+            gap_values = (observed[1:].asi8 - observed[:-1].asi8) / 3_600_000_000_000 if len(observed) > 1 else []
+            session_based = len(gap_values) > 0 and max(gap_values) > 8.0
+            labels = [
+                timestamp.strftime("%d %b\n%H:%M") if session_based else timestamp.strftime("%H:%M")
+                for timestamp in ticks
+            ]
         else:
             span = ticks[-1] - ticks[0]
             date_format = "%d %b\n%H:%M" if span >= pd.Timedelta(days=2) else "%H:%M"
