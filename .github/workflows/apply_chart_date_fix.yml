@@ -1,0 +1,67 @@
+name: Apply chart date placement fix
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  apply:
+    if: ${{ github.event.issue.title == 'APPLY-CHART-DATE-FIX' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Move chart date to header
+        shell: bash
+        env:
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('app/candlestick_chart.py')
+          s = p.read_text(encoding='utf-8')
+
+          old = '    ax.text(0.985, 1.18, f"{timeframe.upper()} • UTC", transform=ax.transAxes, ha="right", va="center", fontsize=9.5, fontweight="bold", color="#cfd4dc")'
+          new = '    ax.text(0.985, 1.18, f"{timeframe.upper()}/Chart • UTC • {work.index[-1].tz_convert(UTC).strftime(\"%Y-%b-%d\")}", transform=ax.transAxes, ha="right", va="center", fontsize=9.5, fontweight="bold", color="#cfd4dc")'
+          if old not in s:
+              raise SystemExit('Header chart label target not found')
+          s = s.replace(old, new, 1)
+
+          old_footer = '    fig.text(0.86, 0.245, chart_date, ha="right", va="center", fontsize=8.3, color="#aab0bb")\n    fig.text(0.86, 0.220, f"{timeframe.upper()} • UTC", ha="right", va="center", fontsize=8.0, fontweight="bold", color="#b8bdc7")\n\n'
+          if old_footer not in s:
+              raise SystemExit('Footer chart date block not found')
+          s = s.replace(old_footer, '', 1)
+
+          p.write_text(s, encoding='utf-8')
+          PY
+          python -m compileall -q app
+
+      - name: Commit and clean up
+        shell: bash
+        env:
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/candlestick_chart.py
+          git rm .github/workflows/apply_chart_date_fix.yml
+          git commit -m 'Move chart date to header'
+          git push origin HEAD:main
+          curl -fsSL -X PATCH \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${REPO}/issues/${ISSUE_NUMBER}" \
+            -d '{"state":"closed"}' >/dev/null
