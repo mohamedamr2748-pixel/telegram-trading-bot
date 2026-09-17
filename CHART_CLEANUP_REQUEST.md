@@ -1,0 +1,1 @@
+Approved chart cleanup: remove only recently-added duplicate OHLC footer, restore old footer unchanged; fix 4H timestamps only; clean header to 4H/Chart • UTC • 2026-Sep-17; preserve the rest.
