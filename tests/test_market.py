@@ -56,7 +56,7 @@ def test_stock_4h_aggregation_uses_regular_session_only() -> None:
     result = YFinanceProvider._resample_stock_4h(frame)
 
     assert result.index.tz is not None
-    assert result.index.tz.zone == "UTC"
+    assert str(result.index.tz) == "UTC"
     assert list(result["Open"]) == [101.0, 105.0]
     assert list(result["Close"]) == [104.0, 107.0]
     assert list(result["Volume"]) == [100.0, 180.0]
