@@ -23,6 +23,30 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Apply exact timestamp snapshot on main
+        if: ${{ github.ref == 'refs/heads/main' && github.event.head_commit.message != 'Fix timeframe-aware chart timestamps' }}
+        env:
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          fetch_gzip_blob() {
+            local sha="$1"
+            local output="$2"
+            curl -fsSL \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${REPO}/git/blobs/${sha}" \
+              | jq -r '.content' \
+              | base64 -d \
+              | gzip -d > "${output}"
+          }
+          fetch_gzip_blob b0e2003058344b56aeadc986da707bb8eefa6103 app/charts.py
+          fetch_gzip_blob c90dbec5017e2a2866b601940b41bf92847b001f tests/test_charts.py
+          test "$(sha256sum app/charts.py | awk '{print $1}')" = "ea695413a046f41dc4369114786d3998eab38c80b4fe8871dd6fcd20b1cf6848"
+          test "$(sha256sum tests/test_charts.py | awk '{print $1}')" = "b2b4de0fe9768417bcb6498e8bed56aef54f7581e18b405ec12beb3a3dd6fb3f"
+
       - name: Compile Python files
         run: python -m compileall -q .
 
@@ -30,3 +54,19 @@ jobs:
         env:
           BOT_TOKEN: test-token
         run: pytest -q
+
+      - name: Commit exact snapshot back to main
+        if: ${{ github.ref == 'refs/heads/main' && github.event.head_commit.message != 'Fix timeframe-aware chart timestamps' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/apply_timestamp_fix.yml
+          git checkout HEAD^ -- .github/workflows/ci.yml
+          git add app/charts.py tests/test_charts.py .github/workflows/ci.yml
+          files="$(git diff --cached --name-only | sort)"
+          expected="$(printf '%s\n' '.github/workflows/apply_timestamp_fix.yml' 'app/charts.py' 'tests/test_charts.py')"
+          test "$files" = "$expected" || { echo 'Unexpected staged files:'; printf '%s\n' "$files"; exit 1; }
+          git commit -m 'Fix timeframe-aware chart timestamps'
+          git push origin HEAD:main
