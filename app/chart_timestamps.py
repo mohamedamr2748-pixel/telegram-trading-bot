@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Literal
+from zoneinfo import ZoneInfo
 
 import matplotlib.dates as mdates
 import pandas as pd
 
-UTC = "UTC"
+UTC = ZoneInfo("UTC")
 TimestampMode = Literal["intraday", "daily", "weekly", "monthly"]
 
 
@@ -69,9 +70,9 @@ def _format_for(rule: TimestampRule, timestamps: pd.DatetimeIndex) -> str:
 def configure_price_x_axis(ax, timeframe: str, index: pd.DatetimeIndex) -> None:
     """Configure a price-chart X-axis from actual observed candle timestamps.
 
-    The button label is treated as the candle interval. We never fabricate a
-    timestamp grid from a different timeframe and we never use an automatic
-    locator that can produce labels unrelated to the observed candles.
+    The button label is treated as the candle interval. Major ticks are selected
+    from the real observation index, so the labels always refer to real candle
+    timestamps. Missing market periods remain gaps rather than synthetic data.
     """
     timestamps = _normalise_index(index)
     if len(timestamps) == 0:
