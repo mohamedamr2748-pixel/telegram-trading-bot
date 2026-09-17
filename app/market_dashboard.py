@@ -7,15 +7,16 @@ from html import escape
 from aiogram import F
 from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
+from app.chart_display_symbols import chart_display_symbol
 from app.charts import render_chart
 from app.market import MarketService
 from app.movers import Mover, get_top_movers
 
 
-SYMBOLS = ["^GSPC", "^IXIC", "^DJI", "BTC-USD", "GC=F"]
+SYMBOLS = ["^GSPC", "^NDX", "^DJI", "BTC-USD", "GC=F"]
 LABELS = {
     "^GSPC": "S&P 500",
-    "^IXIC": "NASDAQ",
+    "^NDX": "NASDAQ-100",
     "^DJI": "Dow Jones",
     "BTC-USD": "Bitcoin",
     "GC=F": "Gold",
@@ -77,7 +78,7 @@ def _mover_line(mover: Mover, positive: bool) -> str:
 
 def _market_keyboard(gainers: tuple[Mover, ...], losers: tuple[Mover, ...]) -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton(text="📈 S&P 500", callback_data="marketv2:chart:^GSPC"), InlineKeyboardButton(text="📈 NASDAQ", callback_data="marketv2:chart:^IXIC")],
+        [InlineKeyboardButton(text="📈 S&P 500", callback_data="marketv2:chart:^GSPC"), InlineKeyboardButton(text="📈 NASDAQ-100", callback_data="marketv2:chart:^NDX")],
         [InlineKeyboardButton(text="📉 Dow Jones", callback_data="marketv2:chart:^DJI"), InlineKeyboardButton(text="₿ Bitcoin", callback_data="marketv2:chart:BTC-USD")],
         [InlineKeyboardButton(text="🥇 Gold", callback_data="marketv2:chart:GC=F"), InlineKeyboardButton(text="🔥 Top Movers", callback_data="marketv2:movers")],
         [InlineKeyboardButton(text="🔄 Refresh", callback_data="marketv2:refresh")],
@@ -154,8 +155,9 @@ async def _market_chart(callback: CallbackQuery, symbol: str) -> None:
     try:
         market = MarketService()
         df = await market.get_history(symbol, period="1d", interval="15m")
-        image = await render_chart(df, symbol, "1d/15m")
-        caption = f"📈 <b>{symbol}</b> • 1d/15m • UTC"
+        display_symbol = chart_display_symbol(symbol)
+        image = await render_chart(df, display_symbol, "1d/15m")
+        caption = f"📈 <b>{display_symbol}</b> • 1d/15m • UTC"
         await callback.message.answer_photo(
             BufferedInputFile(image.getvalue(), filename=f"{symbol}.png"),
             caption=caption,
