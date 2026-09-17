@@ -25,7 +25,7 @@ PRICE_TIMEFRAMES: dict[str, tuple[str, str, str | None]] = {
     "15M": ("1mo", "15m", None),
     "30M": ("1mo", "30m", None),
     "1H": ("6mo", "1h", None),
-    "4H": ("6mo", "1h", "4h"),
+    "4H": ("6mo", "4h", None),
     "1D": ("1y", "1d", None),
     "1W": ("5y", "1wk", None),
     "1MO": ("max", "1mo", None),

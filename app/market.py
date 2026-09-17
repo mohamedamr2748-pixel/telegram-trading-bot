@@ -434,8 +434,88 @@ class BiQuoteProvider(MarketProvider):
             post_market_price=to_float(data.get("postMarketPrice"), 0.0) or None,
         )
 
+    @staticmethod
+    def _normalize_history_symbol(symbol: str) -> str:
+        raw = symbol.strip().upper()
+        compact = raw.replace("/", "").replace("-", "")
+        aliases = {
+            "BTCUSD": "BTCUSD",
+            "ETHUSD": "ETHUSD",
+            "SOLUSD": "SOLUSD",
+            "XRPUSD": "XRPUSD",
+            "BNBUSD": "BNBUSD",
+            "BTCUSD": "BTCUSD",
+            "GC=F": "XAUUSD",
+            "XAUUSD": "XAUUSD",
+            "SI=F": "XAGUSD",
+            "XAGUSD": "XAGUSD",
+            "CL=F": "USOIL",
+            "BZ=F": "UKOIL",
+            "^DJI": "US30",
+            "^NDX": "NAS100",
+            "^GSPC": "SPX500",
+            "^GDAXI": "GER40",
+            "^FTSE": "UK100",
+        }
+        return aliases.get(raw, aliases.get(compact, compact))
+
+    @staticmethod
+    def _bars_to_frame(bars: object, symbol: str) -> pd.DataFrame:
+        if not isinstance(bars, list):
+            raise ValueError(f"BiQuote returned no OHLC bars for {symbol}")
+
+        rows: list[dict] = []
+        for bar in bars:
+            if not isinstance(bar, dict):
+                continue
+            raw_time = bar.get("openTime") or bar.get("timestamp") or bar.get("time")
+            if raw_time in (None, ""):
+                continue
+            try:
+                timestamp = pd.to_datetime(raw_time, utc=True)
+                values = {
+                    "Open": to_float(bar.get("open"), None),
+                    "High": to_float(bar.get("high"), None),
+                    "Low": to_float(bar.get("low"), None),
+                    "Close": to_float(bar.get("close"), None),
+                    "Volume": to_float(bar.get("volume"), to_float(bar.get("tickVolume"), 0.0)),
+                }
+            except (TypeError, ValueError):
+                continue
+            if any(values[column] is None for column in ("Open", "High", "Low", "Close")):
+                continue
+            rows.append({"Date": timestamp, **values})
+
+        if not rows:
+            raise ValueError(f"No valid 4H OHLC bars returned for {symbol}")
+
+        frame = pd.DataFrame(rows).set_index("Date").sort_index()
+        frame = frame[~frame.index.duplicated(keep="last")]
+        return frame[["Open", "High", "Low", "Close", "Volume"]]
+
     async def get_history(self, symbol: str, period: str = "1mo", interval: str = "1d") -> pd.DataFrame:
-        raise NotImplementedError("Use Google Finance or yfinance for OHLC history")
+        requested_interval = interval.strip().lower()
+        if requested_interval != "4h":
+            raise ValueError("BiQuote history currently supports only native 4H data")
+
+        provider_symbol = self._normalize_history_symbol(symbol)
+        # 120 display candles are needed by /price. BiQuote prepends the current
+        # open candle, so this yields up to 121 rows and lets the dashboard keep
+        # the latest 120 without resampling. The period argument is intentionally
+        # ignored because BiQuote's OHLC endpoint is limit-based.
+        params = {"interval": "4h", "limit": "120"}
+        url = f"{self.base_url}/{quote(provider_symbol, safe='')}\/ohlc"
+        async with httpx.AsyncClient(timeout=15) as client:
+            response = await client.get(url, params=params)
+            response.raise_for_status()
+            payload = response.json()
+
+        if not isinstance(payload, dict):
+            raise ValueError(f"BiQuote returned an invalid response for {symbol}")
+        frame = self._bars_to_frame(payload.get("bars"), provider_symbol)
+        if not frame.index.is_monotonic_increasing:
+            frame = frame.sort_index()
+        return frame
 
 
 class MarketService:
@@ -473,8 +553,28 @@ class MarketService:
         raise RuntimeError("Market providers failed: " + " | ".join(errors))
 
     async def get_history(self, symbol: str, period: str = "1mo", interval: str = "1d") -> pd.DataFrame:
+        normalized_symbol = symbol.strip().upper()
+        normalized_interval = interval.strip().lower()
+
+        # Native 4H is deliberately routed to BiQuote first. We keep yfinance
+        # as a compatibility fallback so an unsupported symbol does not break
+        # /price while BiQuote coverage is being expanded.
+        if normalized_interval == "4h":
+            errors: list[str] = []
+            if settings.biquote_enabled:
+                try:
+                    return await self.bq.get_history(normalized_symbol, period, normalized_interval)
+                except Exception as exc:
+                    errors.append(f"{self.bq.name}: {exc}")
+            if settings.yfinance_enabled:
+                try:
+                    return await self.yf.get_history(normalized_symbol, period, normalized_interval)
+                except Exception as exc:
+                    errors.append(f"{self.yf.name}: {exc}")
+            raise RuntimeError("4H history providers failed: " + " | ".join(errors))
+
         if settings.google_finance_enabled:
             if not self.google.enabled:
                 raise RuntimeError("Google Finance is enabled but GOOGLE_FINANCE_API_KEY is missing")
-            return await self.google.get_history(symbol.strip().upper(), period, interval)
-        return await self.yf.get_history(symbol.strip().upper(), period, interval)
+            return await self.google.get_history(normalized_symbol, period, interval)
+        return await self.yf.get_history(normalized_symbol, period, interval)
