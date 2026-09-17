@@ -29,17 +29,23 @@ def _display_ticks(index: pd.DatetimeIndex, timeframe: str) -> tuple[pd.Datetime
         return observed, []
     observed = observed.drop_duplicates().sort_values()
     count, unit = legacy._timeframe_interval(timeframe)
-    if count == 4 and unit == "h":
-        start_boundary = observed[0].floor("4h")
-        end_boundary = observed[-1].floor("4h")
-        grid = pd.date_range(start=start_boundary, end=end_boundary, freq="4h", tz=UTC)
-        ticks = grid[(grid >= observed[0]) & (grid <= observed[-1])]
-        if len(ticks) == 0:
+
+    if unit in {"m", "h"}:
+        # Intraday labels must refer to real observed candles. We deliberately
+        # do not create synthetic timestamps for missing market periods.
+        tick_count = min(7, len(observed))
+        if tick_count == 1:
             ticks = pd.DatetimeIndex([observed[0]])
-        elif len(ticks) > 7:
-            positions = [round(i * (len(ticks) - 1) / 6) for i in range(7)]
-            ticks = pd.DatetimeIndex([ticks[position] for position in positions])
-        return pd.DatetimeIndex(ticks), [timestamp.strftime("%H:%M") for timestamp in ticks]
+        else:
+            positions = [round(i * (len(observed) - 1) / (tick_count - 1)) for i in range(tick_count)]
+            ticks = pd.DatetimeIndex([observed[position] for position in positions])
+        if count == 4 and unit == "h":
+            labels = [timestamp.strftime("%H:%M") for timestamp in ticks]
+        else:
+            span = ticks[-1] - ticks[0]
+            date_format = "%d %b\n%H:%M" if span >= pd.Timedelta(days=2) else "%H:%M"
+            labels = [timestamp.strftime(date_format) for timestamp in ticks]
+        return ticks, labels
 
     step = legacy._timestamp_tick_step(timeframe, observed[-1] - observed[0])
     ticks = [observed[0]]
@@ -54,13 +60,13 @@ def _display_ticks(index: pd.DatetimeIndex, timeframe: str) -> tuple[pd.Datetime
     if len(ticks) <= 1:
         return ticks, [ticks[0].strftime("%H:%M")] if len(ticks) else []
     span = ticks[-1] - ticks[0]
-    if unit in {"m", "h"}:
-        date_format = "%d %b\n%H:%M" if span >= pd.Timedelta(days=2) else "%H:%M"
-    elif unit == "mo":
+    if unit == "mo":
         date_format = "%b %Y"
     else:
         date_format = "%b %Y" if span >= pd.Timedelta(days=365) else "%d %b"
     return ticks, [timestamp.strftime(date_format) for timestamp in ticks]
+
+
 def _candle_width_days(index: pd.DatetimeIndex, timeframe: str) -> float:
     count, unit = legacy._timeframe_interval(timeframe)
     base_days = count * {
@@ -80,12 +86,12 @@ def _candle_width_days(index: pd.DatetimeIndex, timeframe: str) -> float:
     return max(base_days * 0.72, 1.0 / (24.0 * 60.0) * 0.55)
 
 
-def _plot_candles(ax, work: pd.DataFrame, timeframe: str) -> None:
+def _plot_candles(ax, work: pd.DataFrame, timeframe: str, compact: bool = False) -> None:
     ohlc = work[["Open", "High", "Low", "Close"]].apply(pd.to_numeric, errors="coerce").dropna()
     if ohlc.empty:
         return
-    width = _candle_width_days(ohlc.index, timeframe)
-    x_values = mdates.date2num(ohlc.index.to_pydatetime())
+    width = 0.72 if compact else _candle_width_days(ohlc.index, timeframe)
+    x_values = list(range(len(ohlc))) if compact else mdates.date2num(ohlc.index.to_pydatetime())
     for x_value, row in zip(x_values, ohlc.itertuples(index=False)):
         opening, high, low, close = map(float, row)
         candle_colour = _CANDLE_UP if close >= opening else _CANDLE_DOWN
@@ -108,14 +114,14 @@ def _plot_candles(ax, work: pd.DataFrame, timeframe: str) -> None:
         )
 
 
-def _plot_volume(ax, work: pd.DataFrame, timeframe: str) -> None:
+def _plot_volume(ax, work: pd.DataFrame, timeframe: str, compact: bool = False) -> None:
     if "Volume" not in work.columns:
         return
     volume = pd.to_numeric(work["Volume"], errors="coerce").fillna(0)
     if not (volume > 0).any():
         return
-    width = _candle_width_days(work.index, timeframe) * 0.82
-    x_values = mdates.date2num(work.index.to_pydatetime())
+    width = (0.82 if compact else _candle_width_days(work.index, timeframe) * 0.82)
+    x_values = list(range(len(work))) if compact else mdates.date2num(work.index.to_pydatetime())
     for x_value, row in zip(x_values, work[["Open", "Close", "Volume"]].itertuples(index=False)):
         opening, close, amount = map(float, row)
         if amount <= 0:
@@ -125,7 +131,13 @@ def _plot_volume(ax, work: pd.DataFrame, timeframe: str) -> None:
     ax.text(0.0, 0.88, "Volume", transform=ax.transAxes, ha="left", va="top", fontsize=7.8, color="#8f96a3")
 
 
-def _configure_x_axis(ax, index: pd.DatetimeIndex, timeframe: str, visible_bounds: tuple[pd.Timestamp, pd.Timestamp] | None = None) -> None:
+def _configure_x_axis(
+    ax,
+    index: pd.DatetimeIndex,
+    timeframe: str,
+    visible_bounds: tuple[pd.Timestamp, pd.Timestamp] | None = None,
+    compact: bool = False,
+) -> None:
     observed = legacy._display_index(index, "")
     if visible_bounds is not None:
         lower, upper = visible_bounds
@@ -133,9 +145,13 @@ def _configure_x_axis(ax, index: pd.DatetimeIndex, timeframe: str, visible_bound
     ticks, labels = _display_ticks(observed, timeframe)
     if not len(ticks):
         return
-    positions = mdates.date2num(ticks.to_pydatetime())
+    if compact:
+        positions = observed.get_indexer(ticks)
+        positions = [int(position) for position in positions if position >= 0]
+    else:
+        positions = mdates.date2num(ticks.to_pydatetime())
     ax.xaxis.set_major_locator(FixedLocator(positions))
-    ax.xaxis.set_major_formatter(FixedFormatter(labels))
+    ax.xaxis.set_major_formatter(FixedFormatter(labels[:len(positions)]))
     ax.xaxis.get_offset_text().set_visible(False)
 
 
@@ -232,6 +248,7 @@ async def render_google_finance_chart(
         else:
             previous = first_close
 
+    compact_x = frame is None and interval_unit in {"m", "h"}
     period_perf = legacy._period_performance(work["Close"], timeframe, change_percent)
     regular_perf = legacy._regular_session_performance(work.index, work["Close"], frame) if frame is not None else None
     colour_perf = regular_perf if frame is not None else period_perf
@@ -265,9 +282,9 @@ async def render_google_finance_chart(
 
     if frame is not None:
         legacy._draw_session_bands(ax, frame, session_colour)
-    _plot_candles(ax, work, timeframe)
+    _plot_candles(ax, work, timeframe, compact=compact_x)
     if volume_ax is not None:
-        _plot_volume(volume_ax, work, timeframe)
+        _plot_volume(volume_ax, work, timeframe, compact=compact_x)
 
     if previous is not None:
         ax.axhline(previous, linewidth=1.0, linestyle=(0, (5, 6)), color="#e4e7eb", alpha=0.85, zorder=2)
@@ -291,10 +308,13 @@ async def render_google_finance_chart(
         ax.set_xlim(xmin, xmax)
         _configure_x_axis(tick_ax, work.index, timeframe, visible_bounds=(frame.x_min_utc, frame.x_max_utc))
     else:
-        x = work.index.to_pydatetime()
-        if len(x) > 1:
-            ax.set_xlim(x[0], x[-1])
-        _configure_x_axis(tick_ax, work.index, timeframe)
+        if compact_x:
+            ax.set_xlim(-0.85, max(len(work) - 0.15, 0.85))
+        else:
+            x = work.index.to_pydatetime()
+            if len(x) > 1:
+                ax.set_xlim(x[0], x[-1])
+        _configure_x_axis(tick_ax, work.index, timeframe, compact=compact_x)
     if volume_ax is not None:
         ax.tick_params(axis="x", labelbottom=False)
 
