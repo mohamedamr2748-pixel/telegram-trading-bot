@@ -1,0 +1,116 @@
+name: Apply chart cleanup
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  apply:
+    if: ${{ github.event.issue.title == 'APPLY-CHART-CLEANUP' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Apply exact chart cleanup
+        shell: bash
+        env:
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path('app/candlestick_chart.py')
+          text = path.read_text(encoding='utf-8')
+
+          if '# PRO_CHART_V2' not in text:
+              raise SystemExit('Expected professional chart implementation was not found; refusing to modify.')
+
+          # 1) Fix 4H timestamp labels only. Do not touch candle data, geometry,
+          # prices, or any other chart rendering. Generate a chronological UTC
+          # 4-hour grid and select a small subset of those timestamps.
+          start = text.index('def _display_ticks(')
+          end = text.index('\ndef _candle_width_days', start)
+          new_display = '''def _display_ticks(index: pd.DatetimeIndex, timeframe: str) -> tuple[pd.DatetimeIndex, list[str]]:\n    observed = legacy._display_index(index, "")\n    if not len(observed):\n        return observed, []\n    observed = observed.drop_duplicates().sort_values()\n    count, unit = legacy._timeframe_interval(timeframe)\n    if count == 4 and unit == "h":\n        start_boundary = observed[0].floor("4h")\n        end_boundary = observed[-1].floor("4h")\n        grid = pd.date_range(start=start_boundary, end=end_boundary, freq="4h", tz=UTC)\n        ticks = grid[(grid >= observed[0]) & (grid <= observed[-1])]\n        if len(ticks) == 0:\n            ticks = pd.DatetimeIndex([observed[0]])\n        elif len(ticks) > 7:\n            positions = [round(i * (len(ticks) - 1) / 6) for i in range(7)]\n            ticks = pd.DatetimeIndex([ticks[position] for position in positions])\n        return pd.DatetimeIndex(ticks), [timestamp.strftime("%H:%M") for timestamp in ticks]\n\n    step = legacy._timestamp_tick_step(timeframe, observed[-1] - observed[0])\n    ticks = [observed[0]]\n    next_target = observed[0] + step\n    for timestamp in observed[1:]:\n        if timestamp >= next_target:\n            ticks.append(timestamp)\n            next_target = timestamp + step\n    if ticks[-1] != observed[-1]:\n        ticks.append(observed[-1])\n    ticks = pd.DatetimeIndex(ticks)\n    if len(ticks) <= 1:\n        return ticks, [ticks[0].strftime("%H:%M")] if len(ticks) else []\n    span = ticks[-1] - ticks[0]\n    if unit in {"m", "h"}:\n        date_format = "%d %b\\n%H:%M" if span >= pd.Timedelta(days=2) else "%H:%M"\n    elif unit == "mo":\n        date_format = "%b %Y"\n    else:\n        date_format = "%b %Y" if span >= pd.Timedelta(days=365) else "%d %b"\n    return ticks, [timestamp.strftime(date_format) for timestamp in ticks]\n'''
+          text = text[:start] + new_display + text[end + 1:]
+
+          # 2) Clean header: 4H/Chart • UTC • YYYY-Mon-DD. Normalise the
+          # timeframe part so values such as 4H/CHART do not duplicate Chart.
+          header_pattern = re.compile(
+              r'    ax\.text\(0\.985, 1\.18, f"\{timeframe\.upper\(\)\}/Chart • UTC • \{work\.index\[-1\]\.tz_convert\(UTC\)\.strftime\("%Y-%b-%d"\)\}", transform=ax\.transAxes, ha="right", va="center", fontsize=9\.5, fontweight="bold", color="#cfd4dc"\)\n\n'
+          )
+          header = '''    display_timeframe = timeframe.split("/", 1)[0].strip().upper()\n    chart_date = work.index[-1].tz_convert(UTC).strftime("%Y-%b-%d")\n    ax.text(0.985, 1.18, f"{display_timeframe}/Chart • UTC • {chart_date}", transform=ax.transAxes, ha="right", va="center", fontsize=9.5, fontweight="bold", color="#cfd4dc")\n\n'''
+          text, count = header_pattern.subn(header, text, count=1)
+          if count != 1:
+              raise SystemExit('Could not locate chart header')
+
+          # 3) Remove ONLY the recently-added duplicate OHLC footer. Restore
+          # the previous footer metadata layout exactly as before that addition.
+          ohlc_pattern = re.compile(
+              r'    chart_date = work\.index\[-1\]\.tz_convert\(UTC\)\.strftime\("%Y-%b-%d"\)\n'
+              r'    fig\.add_artist\(plt\.Line2D\(\[0\.035, 0\.93\], \[0\.262, 0\.262\], transform=fig\.transFigure, color="#34373b", linewidth=0\.9\)\)\n\n'
+              r'    last_candle = work\.iloc\[-1\]\n'
+              r'    ohlc = .*?\n'
+              r'    ohlc_x = .*?\n'
+              r'    for xpos, \(label, value\) in zip\(ohlc_x, ohlc\):\n'
+              r'        fig\.text\(xpos, 0\.232, label, .*?\n'
+              r'        fig\.text\(xpos \+ 0\.058, 0\.232, legacy\._fmt_value\(value, digits\), .*?\n\n'
+              r'    rows = legacy\._asset_stats_rows\(symbol, quote, stats, period_perf\)\n'
+              r'    y_positions = \[0\.190, 0\.150, 0\.110\]\n',
+              re.DOTALL,
+          )
+          restored = '''    fig.add_artist(plt.Line2D([0.035, 0.93], [0.262, 0.262], transform=fig.transFigure, color="#34373b", linewidth=0.9))\n\n    rows = legacy._asset_stats_rows(symbol, quote, stats, period_perf)\n    y_positions = [0.225, 0.182, 0.139]\n'''
+          text, count = ohlc_pattern.subn(restored, text, count=1)
+          if count != 1:
+              raise SystemExit('Could not locate the recently-added duplicate OHLC footer')
+
+          # 4) Keep the existing asset metadata positions/formatting unchanged.
+          text = text.replace(
+              '            fig.text(xpos, ypos, label, ha="left", va="center", fontsize=8.7, color="#8f96a3")\n'
+              '            fig.text(xpos + 0.10, ypos, value, ha="left", va="center", fontsize=9.7, fontweight="bold", color="#f8fafc")',
+              '            fig.text(xpos, ypos, label, ha="left", va="center", fontsize=9.0, color="#9aa0a6")\n'
+              '            fig.text(xpos + 0.10, ypos, value, ha="left", va="center", fontsize=10.0, fontweight="bold", color="#f8fafc")',
+              1,
+          )
+
+          # Safety assertions: the requested old footer is restored and the
+          # chart-specific changes remain present.
+          assert 'last_candle = work.iloc[-1]' not in text
+          assert 'display_timeframe = timeframe.split("/", 1)[0].strip().upper()' in text
+          assert 'y_positions = [0.225, 0.182, 0.139]' in text
+          assert 'start_boundary = observed[0].floor("4h")' in text
+
+          path.write_text(text, encoding='utf-8')
+          PY
+
+          python -m compileall -q app
+
+      - name: Commit changes and remove one-time workflow
+        shell: bash
+        env:
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/candlestick_chart.py
+          git rm .github/workflows/apply_chart_cleanup.yml
+          git commit -m 'Clean standard price chart footer and timestamps'
+          git push origin HEAD:main
+          curl -fsSL -X PATCH \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${REPO}/issues/${ISSUE_NUMBER}" \
+            -d '{"state":"closed","state_reason":"completed"}' >/dev/null
