@@ -17,10 +17,18 @@ SYMBOLS = ["^GSPC", "^NDX", "^DJI", "BTC-USD", "GC=F"]
 LABELS = {"^GSPC": "S&P 500", "^NDX": "NASDAQ-100", "^DJI": "Dow Jones", "BTC-USD": "Bitcoin", "GC=F": "Gold"}
 PRICE_DIGITS = {symbol: 2 for symbol in SYMBOLS}
 
+# Price controls are candle intervals. The visible data window is chosen so each
+# interval has enough observations for a useful 120-candle chart.
 PRICE_TIMEFRAMES: dict[str, tuple[str, str, str | None]] = {
-    "1M": ("1d", "1m", None), "5M": ("5d", "5m", None), "15M": ("1mo", "15m", None),
-    "30M": ("1mo", "30m", None), "1H": ("6mo", "1h", None), "4H": ("6mo", "1h", "4h"),
-    "1D": ("1d", "15m", None), "1W": ("5y", "1wk", None), "1MO": ("max", "1mo", None),
+    "1M": ("1d", "1m", None),
+    "5M": ("5d", "5m", None),
+    "15M": ("1mo", "15m", None),
+    "30M": ("1mo", "30m", None),
+    "1H": ("6mo", "1h", None),
+    "4H": ("6mo", "1h", "4h"),
+    "1D": ("1y", "1d", None),
+    "1W": ("5y", "1wk", None),
+    "1MO": ("max", "1mo", None),
 }
 
 def _pct(value: float | None) -> str:

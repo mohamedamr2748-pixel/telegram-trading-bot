@@ -370,16 +370,7 @@ def _plot_session_coloured_line(ax, index: pd.DatetimeIndex, values, frame: Trad
         regular = kinds[i] is SessionKind.REGULAR and kinds[i + 1] is SessionKind.REGULAR
         colour = regular_colour if regular else _EXTENDED_GREY
         alpha = 0.11 if regular else 0.055
-        ax.plot(
-            index[i:i + 2],
-            numeric[i:i + 2],
-            linewidth=2.55,
-            color=colour,
-            solid_capstyle="round",
-            solid_joinstyle="round",
-            antialiased=True,
-            zorder=4,
-        )
+        ax.plot(index[i:i + 2], numeric[i:i + 2], linewidth=2.55, color=colour, solid_capstyle="round", solid_joinstyle="round", antialiased=True, zorder=4)
         ax.fill_between(index[i:i + 2], numeric[i:i + 2], bottom, color=colour, alpha=alpha, zorder=1, antialiased=True)
     last_colour = regular_colour if kinds[-1] is SessionKind.REGULAR else _EXTENDED_GREY
     ax.scatter([index[-1]], [numeric[-1]], s=50, color=last_colour, edgecolor="#202124", linewidth=1.5, zorder=6, antialiased=True)
@@ -396,6 +387,59 @@ def _configure_us_equity_x_axis(ax, frame: TradingFrame) -> None:
     locator = mdates.AutoDateLocator(minticks=6, maxticks=8, interval_multiples=True)
     ax.xaxis.set_major_locator(locator)
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M", tz=UTC))
+    ax.xaxis.get_offset_text().set_visible(False)
+
+
+def _timeframe_key(timeframe: str) -> str:
+    """Return the price timeframe key without the renderer mode suffix."""
+    return timeframe.split("/", 1)[0].strip().upper()
+
+
+def _is_session_intraday_chart(timeframe: str) -> bool:
+    """Only the standalone /chart one-day intraday view uses session framing."""
+    raw = timeframe.split("/", 1)
+    if len(raw) != 2:
+        return False
+    return raw[0].strip().lower() == "1d"
+
+
+def _configure_price_x_axis(ax, timeframe: str, index: pd.DatetimeIndex) -> None:
+    """Configure X-axis labels from the candle timeframe, not from a hard-coded format.
+
+    Price buttons represent candle intervals:
+      1M/5M/15M/30M/1H/4H -> intraday timestamps
+      1D/1W              -> date timestamps
+      1MO                -> month/year timestamps
+    All labels are UTC to match the rest of the price card.
+    """
+    key = _timeframe_key(timeframe)
+    timestamps = pd.DatetimeIndex(index)
+    if len(timestamps) == 0:
+        return
+    if timestamps.tz is None:
+        timestamps = timestamps.tz_localize(UTC)
+    else:
+        timestamps = timestamps.tz_convert(UTC)
+
+    x_min = timestamps[0]
+    x_max = timestamps[-1]
+    if x_max <= x_min:
+        x_max = x_min + pd.Timedelta(minutes=30)
+    ax.set_xlim(x_min.to_pydatetime(), x_max.to_pydatetime())
+
+    locator = mdates.AutoDateLocator(minticks=4, maxticks=6, interval_multiples=True)
+    ax.xaxis.set_major_locator(locator)
+    if key == "1M":
+        fmt = "%H:%M"
+    elif key in {"5M", "15M", "30M", "1H", "4H"}:
+        fmt = "%d %b\n%H:%M"
+    elif key in {"1D", "1W"}:
+        fmt = "%d %b"
+    elif key == "1MO":
+        fmt = "%b %Y"
+    else:
+        fmt = "%d %b\n%H:%M"
+    ax.xaxis.set_major_formatter(mdates.DateFormatter(fmt, tz=UTC))
     ax.xaxis.get_offset_text().set_visible(False)
 
 
@@ -427,16 +471,17 @@ async def render_google_finance_chart(
         elif change_percent is None:
             change_percent = quote.change_percent
 
-    is_1d = timeframe.upper().startswith("1D")
+    timeframe_key = _timeframe_key(timeframe)
+    session_intraday = _is_session_intraday_chart(timeframe)
     frame = build_frame(
         symbol,
         work.index[-1],
         quote.asset_class if quote else None,
         observed_index=work.index,
-    ) if is_1d else None
+    ) if session_intraday else None
     trading_date_iso = frame.trading_date.isoformat() if frame and frame.trading_date else None
 
-    if quote is not None and quote.source == "yfinance" and is_1d:
+    if quote is not None and quote.source == "yfinance" and session_intraday:
         corrected_previous = await _correct_yfinance_previous_close(symbol, quote, timeframe, trading_date_iso)
         if corrected_previous is not None:
             prev_close = corrected_previous
@@ -446,7 +491,7 @@ async def render_google_finance_chart(
     last_price = float(price) if price is not None else float(work["Close"].iloc[-1])
     previous = float(prev_close) if prev_close and prev_close > 0 else None
     first_close = float(work["Close"].iloc[0])
-    if is_1d:
+    if timeframe_key == "1D":
         if change_percent is None and previous:
             change_percent = (last_price / previous - 1.0) * 100.0
         elif change_percent is None and first_close > 0 and len(work) >= 2:
@@ -456,7 +501,7 @@ async def render_google_finance_chart(
             change_percent = (last_price / first_close - 1.0) * 100.0
         previous = first_close
 
-    period_perf = _period_performance(work["Close"], timeframe, change_percent)
+    period_perf = _period_performance(work["Close"], timeframe_key, change_percent)
     regular_perf = _regular_session_performance(work.index, work["Close"], frame) if frame is not None else None
     colour_perf = regular_perf if frame is not None else period_perf
     line_color = _REGULAR_GREEN if colour_perf is not None and colour_perf > 1e-12 else _REGULAR_RED if colour_perf is not None and colour_perf < -1e-12 else _EXTENDED_GREY
@@ -498,12 +543,7 @@ async def render_google_finance_chart(
     if frame is not None:
         _configure_us_equity_x_axis(ax, frame)
     else:
-        x = work.index.to_pydatetime()
-        ax.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=4, maxticks=6))
-        ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M" if is_1d else "%d %b", tz=UTC))
-        ax.xaxis.get_offset_text().set_visible(False)
-        if len(x) > 1:
-            ax.set_xlim(x[0], x[-1])
+        _configure_price_x_axis(ax, timeframe_key, work.index)
 
     price_line = f"{_fmt_value(last_price, digits)}{currency_text}"
     if period_perf is not None:
