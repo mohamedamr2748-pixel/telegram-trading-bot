@@ -1,0 +1,53 @@
+name: Fix chart date placement
+
+on:
+  push:
+    paths:
+      - CHART_DATE_FIX_NOW.txt
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Apply exact chart-only change
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('app/candlestick_chart.py')
+          s = p.read_text(encoding='utf-8')
+          old = '    ax.text(0.985, 1.18, f"{timeframe.upper()} • UTC", transform=ax.transAxes, ha="right", va="center", fontsize=9.5, fontweight="bold", color="#cfd4dc")'
+          new = '    ax.text(0.985, 1.18, f"{timeframe.upper()}/Chart • UTC • {work.index[-1].tz_convert(UTC).strftime(\"%Y-%b-%d\")}", transform=ax.transAxes, ha="right", va="center", fontsize=9.5, fontweight="bold", color="#cfd4dc")'
+          if old not in s:
+              raise SystemExit('Expected chart header label was not found; refusing to change anything.')
+          s = s.replace(old, new, 1)
+
+          old_footer = '    fig.text(0.86, 0.245, chart_date, ha="right", va="center", fontsize=8.3, color="#aab0bb")\n    fig.text(0.86, 0.220, f"{timeframe.upper()} • UTC", ha="right", va="center", fontsize=8.0, fontweight="bold", color="#b8bdc7")\n\n'
+          if old_footer not in s:
+              raise SystemExit('Expected duplicate footer label was not found; refusing to change anything.')
+          s = s.replace(old_footer, '', 1)
+          p.write_text(s, encoding='utf-8')
+          PY
+          python -m compileall -q app
+
+      - name: Commit and remove temporary artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm -f .github/workflows/fix_chart_date_placement.yml
+          for f in CHART_DATE_FIX_TRIGGER.txt CHART_DATE_FIX_SCOPE.txt CHART_DATE_FIX_READY.txt CHART_DATE_FIX_RUN.txt CHART_DATE_FIX_TRIGGER.md CHART_DATE_FIX_APPROVED.txt CHART_DATE_FIX_APPLY.txt CHART_DATE_FIX_DO_NOT_EDIT.txt CHART_DATE_FIX_FINAL_TRIGGER.txt CHART_DATE_FIX_ISSUE.txt CHART_DATE_FIX_TRY.txt CHART_DATE_FIX_NOW.txt; do
+            if [ -f "$f" ]; then git rm -f "$f"; fi
+          done
+          git add app/candlestick_chart.py
+          git commit -m 'Move chart date to header only'
+          git push origin HEAD:main
