@@ -1,4 +1,4 @@
-name: Apply chart timestamp fix
+name: Apply exact chart timestamp snapshot
 
 on:
   push:
@@ -9,201 +9,45 @@ permissions:
 
 jobs:
   apply:
+    if: ${{ github.event.head_commit.message != 'Fix timeframe-aware chart timestamps' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Patch app/charts.py
+      - name: Write exact app/charts.py and tests/test_charts.py
         shell: bash
-        run: |
+        env:
+          CHARTS_B64: >-
+            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"
+          TESTS_B64: >-
+            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
           python - <<'PY'
+          import base64, gzip, hashlib, os
           from pathlib import Path
 
-          p = Path('app/charts.py')
-          text = p.read_text()
-
-          if 'from matplotlib.ticker import FixedFormatter, FixedLocator' not in text:
-              text = text.replace('from matplotlib.patches import FancyBboxPatch\n', 'from matplotlib.patches import FancyBboxPatch\nfrom matplotlib.ticker import FixedFormatter, FixedLocator\n', 1)
-
-          old = '    return raw[0].strip().lower() == "1d"\n'
-          new = '    return raw[0].strip().lower() == "1d" and raw[1].strip().lower() != "chart"\n'
-          if old in text and 'raw[1].strip().lower() != "chart"' not in text:
-              text = text.replace(old, new, 1)
-
-          marker = '\n\ndef _timeframe_interval(timeframe: str) -> tuple[int, str]:\n'
-          helpers = r'''
-
-
-def _timeframe_interval(timeframe: str) -> tuple[int, str]:
-    import re
-    match = re.search(r"(\d+)(mo|wk|w|d|h|m)$", timeframe.strip(), re.IGNORECASE)
-    if match is None:
-        return 1, "d"
-    return int(match.group(1)), match.group(2).lower()
-
-
-def _timestamp_tick_step(timeframe: str, span: pd.Timedelta) -> pd.Timedelta:
-    count, unit = _timeframe_interval(timeframe)
-    base_seconds = count * {
-        "m": 60,
-        "h": 60 * 60,
-        "d": 24 * 60 * 60,
-        "w": 7 * 24 * 60 * 60,
-        "wk": 7 * 24 * 60 * 60,
-        "mo": 30 * 24 * 60 * 60,
-    }[unit]
-    multiples = {
-        "m": (1, 2, 3, 5, 10, 15, 30, 60, 120, 240, 360, 720, 1440),
-        "h": (1, 2, 3, 4, 6, 8, 12, 24, 48, 72, 168),
-        "d": (1, 2, 3, 5, 7, 14, 30, 60, 90, 180, 365),
-        "w": (1, 2, 4, 8, 13, 26, 52),
-        "wk": (1, 2, 4, 8, 13, 26, 52),
-        "mo": (1, 2, 3, 6, 12),
-    }[unit]
-    span_seconds = max(span.total_seconds(), 0.0)
-    multiple = next((value for value in multiples if span_seconds / (base_seconds * value) <= 8), multiples[-1])
-    return pd.Timedelta(seconds=base_seconds * multiple)
-
-
-def _observed_timestamp_ticks(index: pd.DatetimeIndex, timeframe: str) -> pd.DatetimeIndex:
-    observed = _display_index(index, "")
-    if not len(observed):
-        return observed
-    observed = observed.drop_duplicates().sort_values()
-    step = _timestamp_tick_step(timeframe, observed[-1] - observed[0])
-    ticks = [observed[0]]
-    next_target = observed[0] + step
-    for timestamp in observed[1:]:
-        if timestamp >= next_target:
-            ticks.append(timestamp)
-            next_target = timestamp + step
-    if ticks[-1] != observed[-1]:
-        ticks.append(observed[-1])
-    return pd.DatetimeIndex(ticks)
-
-
-def _timestamp_tick_labels(ticks: pd.DatetimeIndex, timeframe: str) -> list[str]:
-    if not len(ticks):
-        return []
-    _, unit = _timeframe_interval(timeframe)
-    span = ticks[-1] - ticks[0] if len(ticks) > 1 else pd.Timedelta(0)
-    if unit in {"m", "h"}:
-        fmt = "%d %b\n%H:%M" if span >= pd.Timedelta(days=2) else "%H:%M"
-    elif unit == "mo":
-        fmt = "%b %Y"
-    else:
-        fmt = "%b %Y" if span >= pd.Timedelta(days=365) else "%d %b"
-    return [stamp.strftime(fmt) for stamp in ticks]
-
-
-def _configure_observed_timestamp_ticks(
-    ax,
-    index: pd.DatetimeIndex,
-    timeframe: str,
-    visible_bounds: tuple[pd.Timestamp, pd.Timestamp] | None = None,
-) -> None:
-    observed = _display_index(index, "")
-    if visible_bounds is not None:
-        lower, upper = visible_bounds
-        observed = observed[(observed >= lower) & (observed <= upper)]
-    ticks = _observed_timestamp_ticks(observed, timeframe)
-    if not len(ticks):
-        return
-    positions = mdates.date2num(ticks.to_pydatetime())
-    labels = _timestamp_tick_labels(ticks, timeframe)
-    ax.xaxis.set_major_locator(FixedLocator(positions))
-    ax.xaxis.set_major_formatter(FixedFormatter(labels))
-    ax.xaxis.get_offset_text().set_visible(False)
-'''
-          if marker not in text:
-              insert_at = '\n\nasync def render_google_finance_chart'
-              if insert_at not in text:
-                  raise SystemExit('render anchor not found')
-              text = text.replace(insert_at, helpers + insert_at, 1)
-
-          old_render = '''    if frame is not None:
-        _configure_us_equity_x_axis(ax, frame)
-    else:
-        _configure_price_x_axis(ax, timeframe_key, work.index)
-'''
-          new_render = '''    if frame is not None:
-        _configure_us_equity_x_axis(ax, frame)
-        _configure_observed_timestamp_ticks(
-            ax,
-            work.index,
-            timeframe,
-            visible_bounds=(frame.x_min_utc, frame.x_max_utc),
-        )
-    else:
-        x = work.index.to_pydatetime()
-        if len(x) > 1:
-            ax.set_xlim(x[0], x[-1])
-        _configure_observed_timestamp_ticks(ax, work.index, timeframe)
-'''
-          if old_render not in text:
-              raise SystemExit('render axis anchor not found')
-          text = text.replace(old_render, new_render, 1)
-          p.write_text(text)
+          targets = {
+              Path('app/charts.py'): (os.environ['CHARTS_B64'], 'ea695413a046f41dc4369114786d3998eab38c80b4fe8871dd6fcd20b1cf6848'),
+              Path('tests/test_charts.py'): (os.environ['TESTS_B64'], 'b2b4de0fe9768417bcb6498e8bed56aef54f7581e18b405ec12beb3a3dd6fb3f'),
+          }
+          for path, (encoded, expected_sha) in targets.items():
+              data = gzip.decompress(base64.b64decode(encoded))
+              actual = hashlib.sha256(data).hexdigest()
+              if actual != expected_sha:
+                  raise SystemExit(f'{path}: SHA mismatch {actual} != {expected_sha}')
+              path.parent.mkdir(parents=True, exist_ok=True)
+              path.write_bytes(data)
+          print('Exact snapshot files written and SHA-256 verified.')
           PY
 
-      - name: Patch tests/test_charts.py
-        shell: bash
-        run: |
-          cat >> tests/test_charts.py <<'PY'
-
-          @pytest.mark.parametrize(
-              ("timeframe", "expected"),
-              [
-                  ("1M/chart", (1, "m")), ("5M/chart", (5, "m")),
-                  ("15M/chart", (15, "m")), ("30M/chart", (30, "m")),
-                  ("1H/chart", (1, "h")), ("4H/chart", (4, "h")),
-                  ("1D/chart", (1, "d")), ("1W/chart", (1, "w")),
-                  ("1MO/chart", (1, "mo")),
-                  ("1mo/5m", (5, "m")), ("1y/4h", (4, "h")),
-              ],
-          )
-          def test_timeframe_interval_parses_production_and_legacy_values(timeframe, expected):
-              assert charts._timeframe_interval(timeframe) == expected
-
-
-          def test_intraday_ticks_use_observed_timestamps_and_include_time():
-              idx = pd.date_range("2026-09-17 12:00", periods=120, freq="5min", tz="UTC")
-              fig, ax = plt.subplots()
-              charts._configure_observed_timestamp_ticks(ax, idx, "5M/chart")
-              ticks = pd.to_datetime(mdates.num2date(ax.xaxis.get_majorticklocs()), utc=True)
-              assert set(ticks).issubset(set(idx))
-              assert any(":" in label.get_text() for label in ax.get_xticklabels())
-              plt.close(fig)
-
-
-          def test_four_hour_ticks_use_four_hour_semantics():
-              idx = pd.date_range("2026-09-01", periods=120, freq="4h", tz="UTC")
-              fig, ax = plt.subplots()
-              charts._configure_observed_timestamp_ticks(ax, idx, "4H/chart")
-              ticks = pd.to_datetime(mdates.num2date(ax.xaxis.get_majorticklocs()), utc=True)
-              assert set(ticks).issubset(set(idx))
-              assert 5 <= len(ticks) <= 9
-              plt.close(fig)
-
-
-          def test_daily_weekly_monthly_labels_have_date_semantics():
-              for timeframe, freq in (("1D/chart", "D"), ("1W/chart", "7D"), ("1MO/chart", "30D")):
-                  idx = pd.date_range("2026-01-01", periods=31, freq=freq, tz="UTC")
-                  fig, ax = plt.subplots()
-                  charts._configure_observed_timestamp_ticks(ax, idx, timeframe)
-                  labels = [label.get_text() for label in ax.get_xticklabels()]
-                  assert labels
-                  assert all(":" not in label for label in labels)
-                  plt.close(fig)
-          PY
-
-      - name: Verify
+      - name: Verify exact snapshot
         env:
           PYTHONPATH: .
           BOT_TOKEN: test-token
-        run: python -m compileall -q app tests && pytest -q
+        run: |
+          python -m compileall -q app tests
+          pytest -q
 
-      - name: Commit only requested source/test changes and remove this workflow
+      - name: Commit only two source/test files and remove this workflow
         shell: bash
         run: |
           git config user.name 'github-actions[bot]'
@@ -212,6 +56,6 @@ def _configure_observed_timestamp_ticks(
           git add app/charts.py tests/test_charts.py
           files="$(git diff --cached --name-only | sort)"
           expected="$(printf '%s\n' '.github/workflows/apply_timestamp_fix.yml' 'app/charts.py' 'tests/test_charts.py')"
-          test "$files" = "$expected" || { echo "Unexpected staged files:"; printf '%s\n' "$files"; exit 1; }
+          test "$files" = "$expected" || { echo 'Unexpected staged files:'; printf '%s\n' "$files"; exit 1; }
           git commit -m 'Fix timeframe-aware chart timestamps'
           git push origin HEAD:main
