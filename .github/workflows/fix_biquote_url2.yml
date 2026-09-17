@@ -1,0 +1,36 @@
+name: Correct BiQuote URL escaping
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/fix_biquote_url2.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Replace escaped slash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('app/market.py')
+          text = p.read_text()
+          old = r'\\/ohlc'
+          if old not in text:
+              raise SystemExit('Escaped BiQuote path was not found')
+          p.write_text(text.replace(old, '/ohlc', 1))
+          PY
+          python -m compileall -q app
+      - name: Commit
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/market.py
+          git rm .github/workflows/fix_biquote_url2.yml
+          git commit -m 'Correct BiQuote URL path'
+          git push origin HEAD:main
