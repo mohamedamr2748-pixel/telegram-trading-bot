@@ -99,6 +99,55 @@ def test_session_line_colours_regular_green_for_positive_period():
 
 
 @pytest.mark.asyncio
+async def test_regular_session_performance_ignores_extended_hours_movement():
+    idx = pd.to_datetime([
+        "2026-09-11 13:15Z",
+        "2026-09-11 13:30Z",
+        "2026-09-11 19:45Z",
+        "2026-09-11 20:00Z",
+    ], utc=True)
+    frame = build_frame("NFE", idx[-1], "stock", observed_index=idx)
+    assert frame is not None
+
+    performance = charts._regular_session_performance(
+        idx,
+        [105.0, 100.0, 99.0, 120.0],
+        frame,
+    )
+
+    assert performance == pytest.approx(-1.0)
+
+
+@pytest.mark.asyncio
+async def test_us_chart_colour_uses_regular_session_not_aftermarket_price(monkeypatch):
+    idx = pd.to_datetime([
+        "2026-09-11 13:15Z",
+        "2026-09-11 13:30Z",
+        "2026-09-11 19:45Z",
+        "2026-09-11 20:00Z",
+    ], utc=True)
+    captured = {}
+    original = charts._plot_session_coloured_line
+
+    def spy(ax, index, values, frame, regular_colour, bottom):
+        captured["colour"] = regular_colour
+        return original(ax, index, values, frame, regular_colour, bottom)
+
+    monkeypatch.setattr(charts, "_plot_session_coloured_line", spy)
+    image = await charts.render_google_finance_chart(
+        _series(idx, [105.0, 100.0, 99.0, 120.0]),
+        "NFE",
+        "1d/15m",
+        prev_close=105.0,
+        price=120.0,
+        change_percent=14.29,
+    )
+
+    assert image.getbuffer().nbytes > 0
+    assert captured["colour"] == charts._REGULAR_RED
+
+
+@pytest.mark.asyncio
 async def test_full_day_chart_uses_observed_bounds_not_fixed_full_frame(monkeypatch):
     idx = pd.date_range("2026-09-11 13:30", periods=15, freq="15min", tz="UTC")
     df = _series(idx, [100 + i for i in range(len(idx))])
