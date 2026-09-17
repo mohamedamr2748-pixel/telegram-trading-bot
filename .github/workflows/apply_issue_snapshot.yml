@@ -1,0 +1,68 @@
+name: Apply one-time chart snapshot
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: write
+  issues: read
+
+jobs:
+  apply:
+    if: ${{ github.event.issue.title == 'APPLY-DF76411' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Read exact snapshot from issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          body="$(curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/${REPO}/issues/${ISSUE_NUMBER}" | jq -r '.body')"
+          printf '%s\n' "$body" > /tmp/snapshot.txt
+          awk '/^CHARTS_B64_BEGIN$/{p=1;next}/^CHARTS_B64_END$/{p=0}p' /tmp/snapshot.txt | tr -d '\r\n' > /tmp/charts.b64
+          awk '/^TESTS_B64_BEGIN$/{p=1;next}/^TESTS_B64_END$/{p=0}p' /tmp/snapshot.txt | tr -d '\r\n' > /tmp/tests.b64
+          test -s /tmp/charts.b64
+          test -s /tmp/tests.b64
+          base64 -d /tmp/charts.b64 | gzip -d > /tmp/charts.py
+          base64 -d /tmp/tests.b64 | gzip -d > /tmp/test_charts.py
+          test "$(sha256sum /tmp/charts.py | awk '{print $1}')" = "ea695413a046f41dc4369114786d3998eab38c80b4fe8871dd6fcd20b1cf6848"
+          test "$(sha256sum /tmp/test_charts.py | awk '{print $1}')" = "b2b4de0fe9768417bcb6498e8bed56aef54f7581e18b405ec12beb3a3dd6fb3f"
+
+      - name: Verify exact snapshot
+        env:
+          PYTHONPATH: .
+          BOT_TOKEN: test-token
+        run: |
+          cp /tmp/charts.py app/charts.py
+          cp /tmp/test_charts.py tests/test_charts.py
+          python -m compileall -q app tests
+          pip install -r requirements.txt
+          pytest -q
+
+      - name: Rebase main cleanly on d640 and commit only two files
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin d64083e49e8fd3186f0540cdc452f74aff3dd2f0 --depth=1
+          git checkout --detach d64083e49e8fd3186f0540cdc452f74aff3dd2f0
+          cp /tmp/charts.py app/charts.py
+          cp /tmp/test_charts.py tests/test_charts.py
+          git add app/charts.py tests/test_charts.py
+          files="$(git diff --cached --name-only | sort)"
+          expected="$(printf '%s\n' 'app/charts.py' 'tests/test_charts.py')"
+          test "$files" = "$expected"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Fix timeframe-aware chart timestamps'
+          git push origin HEAD:main --force
