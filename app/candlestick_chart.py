@@ -342,7 +342,7 @@ async def render_google_finance_chart(
 
     rows = legacy._asset_stats_rows(symbol, quote, stats, period_perf)
     y_positions = [0.225, 0.182, 0.139]
-    x_positions_text = [0.055, 0.36, 0.66]
+    x_positions_text = [0.055, 0.30, 0.57]
     for ypos, row in zip(y_positions, rows):
         for xpos, (label, value) in zip(x_positions_text, row):
             fig.text(xpos, ypos, label, ha="left", va="center", fontsize=9.0, color="#9aa0a6")
