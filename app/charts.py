@@ -143,6 +143,26 @@ def _price_digits(symbol: str, quote: MarketQuote | None) -> int:
     return 2
 
 
+def _is_index_symbol(symbol: str) -> bool:
+    """Return True for user-facing or provider symbols representing indexes."""
+    normalized = "".join(ch for ch in (symbol or "").upper() if ch.isalnum())
+    return normalized in {
+        "GSPC", "SP500", "SPX", "NDX", "NASDAQ100", "IXIC", "NASDAQ",
+        "NASDAQCOMPOSITE", "DJI", "DOW", "DOWJONES",
+    }
+
+
+def _change_colour(change_percent: float | None) -> str:
+    """Colour the headline from the displayed period change, not chart session colour."""
+    if change_percent is None:
+        return "#f8fafc"
+    if change_percent > 1e-12:
+        return _REGULAR_GREEN
+    if change_percent < -1e-12:
+        return _REGULAR_RED
+    return _EXTENDED_GREY
+
+
 def _period_performance(series: pd.Series, timeframe: str, daily_change: float | None) -> float | None:
     if series.empty:
         return None
@@ -442,7 +462,7 @@ async def render_google_finance_chart(
     line_color = _REGULAR_GREEN if colour_perf is not None and colour_perf > 1e-12 else _REGULAR_RED if colour_perf is not None and colour_perf < -1e-12 else _EXTENDED_GREY
     stats = _regular_session_stats(work, frame, symbol) if frame is not None else _session_stats(work, symbol)
     digits = _price_digits(symbol, quote)
-    currency_text = f" {currency}" if currency else ""
+    currency_text = "" if _is_index_symbol(symbol) else (f" {currency}" if currency else "")
 
     fig = plt.figure(figsize=_STANDARD_FIGSIZE, dpi=_STANDARD_DPI, facecolor="#202124")
     ax = fig.add_axes([0.035, 0.30, 0.865, 0.56])
@@ -489,7 +509,7 @@ async def render_google_finance_chart(
     if period_perf is not None:
         price_line += f"  {period_perf:+.2f}%"
     ax.text(0.0, 1.19, symbol.upper(), transform=ax.transAxes, ha="left", va="bottom", fontsize=20, fontweight="bold", color="#f8fafc")
-    ax.text(0.0, 1.065, price_line, transform=ax.transAxes, ha="left", va="bottom", fontsize=18, fontweight="bold", color=line_color if period_perf is not None else "#f8fafc")
+    ax.text(0.0, 1.065, price_line, transform=ax.transAxes, ha="left", va="bottom", fontsize=18, fontweight="bold", color=_change_colour(period_perf),)
 
     selector = ["1D", "5D", "1M", "6M", "YTD", "1Y", "5Y"]
     selected = _selector_key(timeframe)
