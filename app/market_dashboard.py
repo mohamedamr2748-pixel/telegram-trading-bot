@@ -155,12 +155,43 @@ async def _get_price_history(symbol: str, timeframe: str) -> pd.DataFrame:
     if resample_rule: df = _resample_ohlcv(df, resample_rule)
     return df.tail(120).copy()
 
-def _price_caption(symbol: str, timeframe: str, df: pd.DataFrame, quote: object) -> tuple[str, str]:
+async def _caption_volume_4h(symbol: str, df: pd.DataFrame) -> float | None:
+    """Recover 4H volume for the caption only, without changing chart data.
+
+    Some stock 4H history responses can contain zero volume even though the
+    underlying 1H bars have real traded volume. We keep the existing 4H OHLCV
+    frame untouched for rendering and use an isolated 1H request only when the
+    displayed 4H volume is entirely zero.
+    """
+    if "Volume" in df.columns:
+        existing = pd.to_numeric(df["Volume"], errors="coerce").fillna(0)
+        if float(existing.sum()) > 0:
+            return float(existing.sum())
+    try:
+        hourly = await MarketService().get_history(symbol, period="1mo", interval="1h")
+    except Exception:
+        return float(pd.to_numeric(df["Volume"], errors="coerce").fillna(0).sum()) if "Volume" in df.columns else None
+    if "Volume" not in hourly.columns:
+        return None
+    hourly = hourly.copy()
+    hourly.index = pd.to_datetime(hourly.index, utc=True, errors="coerce")
+    hourly = hourly[hourly.index.notna()].sort_index()
+    hourly_volume = pd.to_numeric(hourly["Volume"], errors="coerce").fillna(0)
+    grouped = hourly_volume.groupby(hourly.index.floor("4h")).sum()
+    candle_times = pd.DatetimeIndex(pd.to_datetime(df.index, utc=True, errors="coerce"))
+    candle_times = candle_times[candle_times.notna()]
+    if len(candle_times) == 0:
+        return None
+    matched = grouped.reindex(candle_times).fillna(0)
+    total = float(matched.sum())
+    return total if total > 0 else float(hourly_volume.sum()) if float(hourly_volume.sum()) > 0 else None
+
+def _price_caption(symbol: str, timeframe: str, df: pd.DataFrame, quote: object, volume_override: float | None = None) -> tuple[str, str]:
     display_symbol = _normalise_price_symbol(symbol); work = df.copy(); close = pd.to_numeric(work["Close"], errors="coerce").dropna()
     last = float(close.iloc[-1]) if not close.empty else float(getattr(quote, "price")); first = float(close.iloc[0]) if not close.empty else last
     change = ((last / first) - 1.0) * 100.0 if first else None
     high = float(pd.to_numeric(work["High"], errors="coerce").max()) if "High" in work else last; low = float(pd.to_numeric(work["Low"], errors="coerce").min()) if "Low" in work else last
-    volume = float(pd.to_numeric(work["Volume"], errors="coerce").sum()) if "Volume" in work else None; candle_count = len(work)
+    volume = volume_override if volume_override is not None else (float(pd.to_numeric(work["Volume"], errors="coerce").sum()) if "Volume" in work else None); candle_count = len(work)
     info = f"{display_symbol:<12} | {timeframe:<3} | {candle_count} candles\nLast: ${_format_price_value(last, quote)} ({_pct(change)})\nHigh: ${_format_price_value(high, quote)}\nLow: ${_format_price_value(low, quote)}\nVol: {_format_volume(volume)}\nSource: {getattr(quote, 'source', 'unknown')}"
     return f"<pre>{escape(info)}</pre>", _format_price_value(float(getattr(quote, "price")), quote)
 
@@ -186,7 +217,8 @@ async def _send_price_card(target: Message | CallbackQuery, symbol: str, timefra
         if df.empty: raise ValueError("No chart data returned")
         display_symbol = chart_display_symbol(symbol)
         image = await render_chart(df, display_symbol, f"{timeframe}/chart", prev_close=getattr(quote, "previous_close", None), price=getattr(quote, "price", None), quote=quote)
-        caption, copy_price = _price_caption(symbol, timeframe, df, quote); keyboard = _price_keyboard(symbol, timeframe, copy_price); media = BufferedInputFile(image.getvalue(), filename=f"{symbol.replace('/', '_')}.png")
+        volume_override = await _caption_volume_4h(symbol, df) if timeframe.upper() == "4H" else None
+        caption, copy_price = _price_caption(symbol, timeframe, df, quote, volume_override=volume_override); keyboard = _price_keyboard(symbol, timeframe, copy_price); media = BufferedInputFile(image.getvalue(), filename=f"{symbol.replace('/', '_')}.png")
         if edit and isinstance(target, CallbackQuery):
             await target.message.edit_media(media=InputMediaPhoto(media=media, caption=caption, parse_mode="HTML"), reply_markup=keyboard)
         else:
