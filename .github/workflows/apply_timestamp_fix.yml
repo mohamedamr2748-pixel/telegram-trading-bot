@@ -17,7 +17,16 @@ jobs:
           set -e
           curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$REPO/git/blobs/b0e2003058344b56aeadc986da707bb8eefa6103" | jq -r .content | base64 -d | gzip -d > app/charts.py
           curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$REPO/git/blobs/c90dbec5017e2a2866b601940b41bf92847b001f" | jq -r .content | base64 -d | gzip -d > tests/test_charts.py
-          test "$(sha256sum app/charts.py | cut -d' ' -f1)" = "ea695413a046f41dc4369114786d3998eab38c80b4fe8871dd6fcd20b1cf6848"
+          python - <<'PY'
+          from pathlib import Path
+          p = Path("app/charts.py")
+          s = p.read_text()
+          old = '''    if unit in {"m", "h"}:\n        date_format = "%d %b\\n%H:%M" if span >= pd.Timedelta(days=2) else "%H:%M"\n'''
+          new = '''    if unit in {"m", "h"}:\n        # 4H charts intentionally show intraday time only.\n        if count == 4 and unit == "h":\n            date_format = "%H:%M"\n        else:\n            date_format = "%d %b\\n%H:%M" if span >= pd.Timedelta(days=2) else "%H:%M"\n'''
+          assert old in s
+          p.write_text(s.replace(old, new, 1))
+          PY
+          test "$(sha256sum app/charts.py | cut -d' ' -f1)" = "2cd2219f0680f3ae9a0ded483653302edcf4f93ebff3c6a50a446a3fe5ef0ed4"
           test "$(sha256sum tests/test_charts.py | cut -d' ' -f1)" = "b2b4de0fe9768417bcb6498e8bed56aef54f7581e18b405ec12beb3a3dd6fb3f"
           pip install -r requirements.txt
           python -m compileall -q app tests
@@ -33,5 +42,5 @@ jobs:
           git add app/charts.py tests/test_charts.py .github/workflows/ci.yml
           git add -u .github/workflows/apply_timestamp_fix.yml
           git diff --cached --name-only
-          git commit -m "Fix timeframe-aware chart timestamps"
+          git commit -m "Hide dates on 4H chart axis"
           git push origin HEAD:main
