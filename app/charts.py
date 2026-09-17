@@ -267,13 +267,16 @@ def _regular_session_performance(
     values,
     frame: TradingFrame | None,
 ) -> float | None:
+    """Return the movement across observed regular-session prices only."""
     if frame is None or frame.regular_utc is None:
         return None
+
     aware = pd.DatetimeIndex(index)
     if aware.tz is None:
         aware = aware.tz_localize(UTC)
     else:
         aware = aware.tz_convert(UTC)
+
     start, end = frame.regular_utc
     regular = pd.Series(values, index=aware)
     regular = pd.to_numeric(regular, errors="coerce")
@@ -327,6 +330,7 @@ def _selector_key(timeframe: str) -> str | None:
 
 
 def _draw_session_bands(ax, frame: TradingFrame, regular_colour: str) -> None:
+    """Show the fixed trading-session frame without inventing any prices."""
     if frame.premarket_utc is not None:
         start, end = frame.premarket_utc
         ax.axvspan(start.to_pydatetime(), end.to_pydatetime(), facecolor=_EXTENDED_GREY, alpha=0.035, zorder=0)
@@ -350,7 +354,16 @@ def _plot_session_coloured_line(ax, index: pd.DatetimeIndex, values, frame: Trad
         regular = kinds[i] is SessionKind.REGULAR and kinds[i + 1] is SessionKind.REGULAR
         colour = regular_colour if regular else _EXTENDED_GREY
         alpha = 0.11 if regular else 0.055
-        ax.plot(index[i:i + 2], numeric[i:i + 2], linewidth=2.55, color=colour, solid_capstyle="round", solid_joinstyle="round", antialiased=True, zorder=4)
+        ax.plot(
+            index[i:i + 2],
+            numeric[i:i + 2],
+            linewidth=2.55,
+            color=colour,
+            solid_capstyle="round",
+            solid_joinstyle="round",
+            antialiased=True,
+            zorder=4,
+        )
         ax.fill_between(index[i:i + 2], numeric[i:i + 2], bottom, color=colour, alpha=alpha, zorder=1, antialiased=True)
     last_colour = regular_colour if kinds[-1] is SessionKind.REGULAR else _EXTENDED_GREY
     ax.scatter([index[-1]], [numeric[-1]], s=50, color=last_colour, edgecolor="#202124", linewidth=1.5, zorder=6, antialiased=True)
@@ -381,7 +394,14 @@ def _timeframe_interval(timeframe: str) -> tuple[int, str]:
 
 def _timestamp_tick_step(timeframe: str, span: pd.Timedelta) -> pd.Timedelta:
     count, unit = _timeframe_interval(timeframe)
-    base_seconds = count * {"m": 60, "h": 60 * 60, "d": 24 * 60 * 60, "w": 7 * 24 * 60 * 60, "wk": 7 * 24 * 60 * 60, "mo": 30 * 24 * 60 * 60}[unit]
+    base_seconds = count * {
+        "m": 60,
+        "h": 60 * 60,
+        "d": 24 * 60 * 60,
+        "w": 7 * 24 * 60 * 60,
+        "wk": 7 * 24 * 60 * 60,
+        "mo": 30 * 24 * 60 * 60,
+    }[unit]
     multiples = {
         "m": (1, 2, 3, 5, 10, 15, 30, 60, 120, 240, 360, 720, 1440),
         "h": (1, 2, 3, 4, 6, 8, 12, 24, 48, 72, 168),
@@ -544,7 +564,12 @@ async def render_google_finance_chart(
 
     if frame is not None:
         _configure_us_equity_x_axis(ax, frame)
-        _configure_observed_timestamp_ticks(ax, work.index, timeframe, visible_bounds=(frame.x_min_utc, frame.x_max_utc))
+        _configure_observed_timestamp_ticks(
+            ax,
+            work.index,
+            timeframe,
+            visible_bounds=(frame.x_min_utc, frame.x_max_utc),
+        )
     else:
         x = work.index.to_pydatetime()
         if len(x) > 1:
