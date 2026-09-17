@@ -1,1 +1,0 @@
-Native 4H data, symbol aliases, advanced charts, and existing market routing must remain unchanged.

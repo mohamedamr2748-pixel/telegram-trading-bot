@@ -20,6 +20,7 @@ _CANDLE_DOWN = "#f26b63"
 _NEUTRAL = "#9aa0a6"
 _GRID = "#34373b"
 _BG = "#202124"
+# PRO_CHART_V2
 
 
 def _display_ticks(index: pd.DatetimeIndex, timeframe: str) -> tuple[pd.DatetimeIndex, list[str]]:
@@ -29,15 +30,18 @@ def _display_ticks(index: pd.DatetimeIndex, timeframe: str) -> tuple[pd.Datetime
     observed = observed.drop_duplicates().sort_values()
     count, unit = legacy._timeframe_interval(timeframe)
     if count == 4 and unit == "h":
-        aligned = observed[
-            (observed.minute == 0)
-            & (observed.second == 0)
-            & (observed.microsecond == 0)
-            & ((observed.hour % 4) == 0)
-        ]
+        aligned = observed[(observed.minute == 0) & (observed.second == 0) & (observed.microsecond == 0) & ((observed.hour % 4) == 0)]
         if len(aligned):
             observed = aligned
-
+        if len(observed) <= 1:
+            ticks = pd.DatetimeIndex(observed)
+        else:
+            target_ticks = 7
+            step = max(1, (len(observed) - 1 + target_ticks - 1) // target_ticks)
+            ticks = pd.DatetimeIndex(observed[::step])
+            if ticks[-1] != observed[-1]:
+                ticks = ticks.append(pd.DatetimeIndex([observed[-1]]))
+        return ticks, [timestamp.strftime("%H:%M") for timestamp in ticks]
     step = legacy._timestamp_tick_step(timeframe, observed[-1] - observed[0])
     ticks = [observed[0]]
     next_target = observed[0] + step
@@ -48,23 +52,16 @@ def _display_ticks(index: pd.DatetimeIndex, timeframe: str) -> tuple[pd.Datetime
     if ticks[-1] != observed[-1]:
         ticks.append(observed[-1])
     ticks = pd.DatetimeIndex(ticks)
-
     if len(ticks) <= 1:
-        labels = [ticks[0].strftime("%H:%M")] if len(ticks) else []
-        return ticks, labels
-
+        return ticks, [ticks[0].strftime("%H:%M")] if len(ticks) else []
     span = ticks[-1] - ticks[0]
     if unit in {"m", "h"}:
-        if count == 4 and unit == "h":
-            date_format = "%H:%M"
-        else:
-            date_format = "%d %b\n%H:%M" if span >= pd.Timedelta(days=2) else "%H:%M"
+        date_format = "%d %b\n%H:%M" if span >= pd.Timedelta(days=2) else "%H:%M"
     elif unit == "mo":
         date_format = "%b %Y"
     else:
         date_format = "%b %Y" if span >= pd.Timedelta(days=365) else "%d %b"
     return ticks, [timestamp.strftime(date_format) for timestamp in ticks]
-
 
 def _candle_width_days(index: pd.DatetimeIndex, timeframe: str) -> float:
     count, unit = legacy._timeframe_interval(timeframe)
@@ -111,6 +108,23 @@ def _plot_candles(ax, work: pd.DataFrame, timeframe: str) -> None:
                 zorder=5,
             )
         )
+
+
+def _plot_volume(ax, work: pd.DataFrame, timeframe: str) -> None:
+    if "Volume" not in work.columns:
+        return
+    volume = pd.to_numeric(work["Volume"], errors="coerce").fillna(0)
+    if not (volume > 0).any():
+        return
+    width = _candle_width_days(work.index, timeframe) * 0.82
+    x_values = mdates.date2num(work.index.to_pydatetime())
+    for x_value, row in zip(x_values, work[["Open", "Close", "Volume"]].itertuples(index=False)):
+        opening, close, amount = map(float, row)
+        if amount <= 0:
+            continue
+        candle_colour = _CANDLE_UP if close >= opening else _CANDLE_DOWN
+        ax.bar(x_value, amount, width=width, align="center", color=candle_colour, alpha=0.38, edgecolor="none", linewidth=0, zorder=2)
+    ax.text(0.0, 0.88, "Volume", transform=ax.transAxes, ha="left", va="top", fontsize=7.8, color="#8f96a3")
 
 
 def _configure_x_axis(ax, index: pd.DatetimeIndex, timeframe: str, visible_bounds: tuple[pd.Timestamp, pd.Timestamp] | None = None) -> None:
@@ -218,13 +232,24 @@ async def render_google_finance_chart(
     currency_text = f" {currency}" if currency else ""
 
     fig = plt.figure(figsize=legacy._STANDARD_FIGSIZE, dpi=legacy._STANDARD_DPI, facecolor=_BG)
-    ax = fig.add_axes([0.035, 0.30, 0.865, 0.56])
+    has_volume = "Volume" in work.columns and bool((pd.to_numeric(work["Volume"], errors="coerce").fillna(0) > 0).any())
+    if has_volume:
+        ax = fig.add_axes([0.035, 0.39, 0.865, 0.47])
+        volume_ax = fig.add_axes([0.035, 0.30, 0.865, 0.075], sharex=ax)
+        volume_ax.set_facecolor(_BG)
+        volume_ax.tick_params(axis="y", left=False, labelleft=False, right=False, labelright=False, length=0)
+        for spine in volume_ax.spines.values():
+            spine.set_visible(False)
+        volume_ax.grid(axis="y", color=_GRID, linestyle="-", linewidth=0.5, alpha=0.35)
+    else:
+        ax = fig.add_axes([0.035, 0.30, 0.865, 0.56])
+        volume_ax = None
     ax.set_facecolor(_BG)
 
     low_series = work["Low"].to_numpy(dtype=float)
     high_series = work["High"].to_numpy(dtype=float)
-    baseline = float(min(low_series.min(), previous if previous is not None else low_series.min()))
-    ceiling = float(max(high_series.max(), previous if previous is not None else high_series.max()))
+    baseline = float(min(low_series.min(), previous if previous is not None else low_series.min(), last_price))
+    ceiling = float(max(high_series.max(), previous if previous is not None else high_series.max(), last_price))
     spread = ceiling - baseline
     padding = max(spread * 0.22, abs(last_price) * 0.0025, 0.01)
     chart_bottom, chart_top = baseline - padding, ceiling + padding
@@ -232,10 +257,15 @@ async def render_google_finance_chart(
     if frame is not None:
         legacy._draw_session_bands(ax, frame, session_colour)
     _plot_candles(ax, work, timeframe)
+    if volume_ax is not None:
+        _plot_volume(volume_ax, work, timeframe)
 
     if previous is not None:
         ax.axhline(previous, linewidth=1.0, linestyle=(0, (5, 6)), color="#e4e7eb", alpha=0.85, zorder=2)
         ax.text(1.002, previous, f"Prev close\n{legacy._fmt_value(previous, digits)}", transform=ax.get_yaxis_transform(), ha="left", va="center", fontsize=8.5, color="#d5d8de", linespacing=1.08)
+
+    ax.axhline(last_price, linewidth=0.9, linestyle=(0, (2, 4)), color=session_colour, alpha=0.72, zorder=3)
+    ax.text(1.002, last_price, legacy._fmt_value(last_price, digits), transform=ax.get_yaxis_transform(), ha="left", va="center", fontsize=8.5, color=session_colour)
 
     ax.set_ylim(chart_bottom, chart_top)
     ax.grid(axis="y", color=_GRID, linestyle="-", linewidth=0.65, alpha=0.75)
@@ -245,14 +275,19 @@ async def render_google_finance_chart(
     ax.tick_params(colors="#d7dbe2", labelsize=8.5, length=0, pad=8)
     ax.yaxis.tick_right()
 
+    tick_ax = volume_ax if volume_ax is not None else ax
     if frame is not None:
-        ax.set_xlim(mdates.date2num(frame.x_min_utc.to_pydatetime()), mdates.date2num(frame.x_max_utc.to_pydatetime()))
-        _configure_x_axis(ax, work.index, timeframe, visible_bounds=(frame.x_min_utc, frame.x_max_utc))
+        xmin = mdates.date2num(frame.x_min_utc.to_pydatetime())
+        xmax = mdates.date2num(frame.x_max_utc.to_pydatetime())
+        ax.set_xlim(xmin, xmax)
+        _configure_x_axis(tick_ax, work.index, timeframe, visible_bounds=(frame.x_min_utc, frame.x_max_utc))
     else:
         x = work.index.to_pydatetime()
         if len(x) > 1:
             ax.set_xlim(x[0], x[-1])
-        _configure_x_axis(ax, work.index, timeframe)
+        _configure_x_axis(tick_ax, work.index, timeframe)
+    if volume_ax is not None:
+        ax.tick_params(axis="x", labelbottom=False)
 
     price_line = f"{legacy._fmt_value(last_price, digits)}{currency_text}"
     if period_perf is not None:
@@ -260,30 +295,28 @@ async def render_google_finance_chart(
     ax.text(0.0, 1.19, symbol.upper(), transform=ax.transAxes, ha="left", va="bottom", fontsize=20, fontweight="bold", color="#f8fafc")
     ax.text(0.0, 1.065, price_line, transform=ax.transAxes, ha="left", va="bottom", fontsize=18, fontweight="bold", color=session_colour if period_perf is not None else "#f8fafc")
 
-    selector = ["1D", "5D", "1M", "6M", "YTD", "1Y", "5Y"]
-    selected = legacy._selector_key(timeframe)
-    start_x, step = 0.67, 0.047
-    for idx, item in enumerate(selector):
-        xpos = start_x + idx * step
-        if item == selected:
-            pill = FancyBboxPatch((xpos - 0.020, 1.145), 0.040, 0.085, boxstyle="round,pad=0.008,rounding_size=0.018", transform=ax.transAxes, linewidth=0, facecolor="#30343a", edgecolor="none", zorder=8)
-            ax.add_patch(pill)
-            ax.text(xpos, 1.19, item, transform=ax.transAxes, ha="center", va="center", fontsize=10.5, fontweight="bold", color="#f8fafc", zorder=9)
-        else:
-            ax.text(xpos, 1.19, item, transform=ax.transAxes, ha="center", va="center", fontsize=10.5, color="#c7ccd4", zorder=8)
+    ax.text(0.985, 1.18, f"{timeframe.upper()} • UTC", transform=ax.transAxes, ha="right", va="center", fontsize=9.5, fontweight="bold", color="#cfd4dc")
 
     chart_date = work.index[-1].tz_convert(UTC).strftime("%Y-%b-%d")
-    ax.text(1.0, -0.105, chart_date, transform=ax.transAxes, ha="right", va="top", fontsize=8.5, color="#b9bec7")
-    ax.text(1.0, -0.145, f"{timeframe.upper()} • UTC", transform=ax.transAxes, ha="right", va="top", color="#b8bdc7", fontsize=8.0, fontweight="bold")
     fig.add_artist(plt.Line2D([0.035, 0.93], [0.262, 0.262], transform=fig.transFigure, color="#34373b", linewidth=0.9))
 
+    last_candle = work.iloc[-1]
+    ohlc = [("Open", float(last_candle["Open"])), ("High", float(last_candle["High"])), ("Low", float(last_candle["Low"])), ("Close", float(last_candle["Close"]))]
+    ohlc_x = [0.055, 0.255, 0.455, 0.655]
+    for xpos, (label, value) in zip(ohlc_x, ohlc):
+        fig.text(xpos, 0.232, label, ha="left", va="center", fontsize=8.8, color="#8f96a3")
+        fig.text(xpos + 0.058, 0.232, legacy._fmt_value(value, digits), ha="left", va="center", fontsize=10.0, fontweight="bold", color="#f8fafc")
+
+    fig.text(0.86, 0.245, chart_date, ha="right", va="center", fontsize=8.3, color="#aab0bb")
+    fig.text(0.86, 0.220, f"{timeframe.upper()} • UTC", ha="right", va="center", fontsize=8.0, fontweight="bold", color="#b8bdc7")
+
     rows = legacy._asset_stats_rows(symbol, quote, stats, period_perf)
-    y_positions = [0.225, 0.182, 0.139]
+    y_positions = [0.190, 0.150, 0.110]
     x_positions_text = [0.055, 0.36, 0.66]
     for ypos, row in zip(y_positions, rows):
         for xpos, (label, value) in zip(x_positions_text, row):
-            fig.text(xpos, ypos, label, ha="left", va="center", fontsize=9.0, color="#9aa0a6")
-            fig.text(xpos + 0.10, ypos, value, ha="left", va="center", fontsize=10.0, fontweight="bold", color="#f8fafc")
+            fig.text(xpos, ypos, label, ha="left", va="center", fontsize=8.7, color="#8f96a3")
+            fig.text(xpos + 0.10, ypos, value, ha="left", va="center", fontsize=9.7, fontweight="bold", color="#f8fafc")
 
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=legacy._STANDARD_DPI, bbox_inches="tight", pad_inches=0.08, facecolor=fig.get_facecolor(), edgecolor="none", pil_kwargs={"compress_level": 1})

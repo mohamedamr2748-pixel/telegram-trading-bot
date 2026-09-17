@@ -1,1 +1,0 @@
-Temporary trigger helper; professional chart migration is driven by the GitHub issue workflow and this file is harmless.
