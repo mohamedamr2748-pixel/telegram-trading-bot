@@ -1,0 +1,37 @@
+name: Fix BiQuote OHLC URL
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/fix_biquote_url.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fix URL and validate
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('app/market.py')
+          text = path.read_text()
+          old = r'''url = f"{self.base_url}/{quote(provider_symbol, safe='')}\\/ohlc"'''
+          new = r'''url = f"{self.base_url}/{quote(provider_symbol, safe='')}/ohlc"'''
+          if old not in text:
+              raise SystemExit('BiQuote URL pattern not found')
+          path.write_text(text.replace(old, new, 1))
+          PY
+          python -m compileall -q app
+      - name: Commit and remove workflow
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/market.py
+          git rm .github/workflows/fix_biquote_url.yml
+          git commit -m 'Fix BiQuote OHLC request URL'
+          git push origin HEAD:main
