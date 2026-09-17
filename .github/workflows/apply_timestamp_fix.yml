@@ -1,60 +1,37 @@
-name: Apply exact verified timestamp snapshot
+name: Apply timestamp snapshot
 
-on:
-  push:
-    branches: [main]
-
-permissions:
-  contents: write
+on: push
 
 jobs:
   apply:
-    if: ${{ github.event.head_commit.message != 'Fix timeframe-aware chart timestamps' }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
-
-      - name: Restore exact verified files
+      - name: Apply exact files
         env:
-          REPO: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
-        shell: bash
+          REPO: ${{ github.repository }}
         run: |
-          set -euo pipefail
-          fetch_gzip_blob() {
-            local sha="$1"
-            local output="$2"
-            curl -fsSL \
-              -H "Authorization: Bearer ${GH_TOKEN}" \
-              -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/${REPO}/git/blobs/${sha}" \
-              | jq -r '.content' \
-              | base64 -d \
-              | gzip -d > "${output}"
-          }
-
-          fetch_gzip_blob b0e2003058344b56aeadc986da707bb8eefa6103 app/charts.py
-          fetch_gzip_blob c90dbec5017e2a2866b601940b41bf92847b001f tests/test_charts.py
-
-          test "$(sha256sum app/charts.py | awk '{print $1}')" = "ea695413a046f41dc4369114786d3998eab38c80b4fe8871dd6fcd20b1cf6848"
-          test "$(sha256sum tests/test_charts.py | awk '{print $1}')" = "b2b4de0fe9768417bcb6498e8bed56aef54f7581e18b405ec12beb3a3dd6fb3f"
-
-      - name: Verify
-        run: |
-          python -m pip install -r requirements.txt
+          set -e
+          curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$REPO/git/blobs/b0e2003058344b56aeadc986da707bb8eefa6103" | jq -r .content | base64 -d | gzip -d > app/charts.py
+          curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$REPO/git/blobs/c90dbec5017e2a2866b601940b41bf92847b001f" | jq -r .content | base64 -d | gzip -d > tests/test_charts.py
+          test "$(sha256sum app/charts.py | cut -d' ' -f1)" = "ea695413a046f41dc4369114786d3998eab38c80b4fe8871dd6fcd20b1cf6848"
+          test "$(sha256sum tests/test_charts.py | cut -d' ' -f1)" = "b2b4de0fe9768417bcb6498e8bed56aef54f7581e18b405ec12beb3a3dd6fb3f"
+          pip install -r requirements.txt
           python -m compileall -q app tests
           pytest -q
-
-      - name: Commit only requested files and remove this helper
-        shell: bash
+      - name: Commit result
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          set -euo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git rm .github/workflows/apply_timestamp_fix.yml
-          git add app/charts.py tests/test_charts.py
-          files="$(git diff --cached --name-only | sort)"
-          expected="$(printf '%s\n' '.github/workflows/apply_timestamp_fix.yml' 'app/charts.py' 'tests/test_charts.py')"
-          test "$files" = "$expected"
-          git commit -m 'Fix timeframe-aware chart timestamps'
+          git checkout HEAD^ -- .github/workflows/ci.yml
+          git add app/charts.py tests/test_charts.py .github/workflows/ci.yml
+          git add -u .github/workflows/apply_timestamp_fix.yml
+          git diff --cached --name-only
+          git commit -m "Fix timeframe-aware chart timestamps"
           git push origin HEAD:main
