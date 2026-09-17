@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import asyncio
 from abc import ABC, abstractmethod
-from datetime import datetime, timezone
+from datetime import datetime, time, timezone
 from urllib.parse import quote
-from datetime import time
 from zoneinfo import ZoneInfo
 
 import httpx
