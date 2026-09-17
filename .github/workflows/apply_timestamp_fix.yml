@@ -26,7 +26,7 @@ jobs:
           assert old in s
           p.write_text(s.replace(old, new, 1))
           PY
-          test "$(sha256sum app/charts.py | cut -d' ' -f1)" = "2cd2219f0680f3ae9a0ded483653302edcf4f93ebff3c6a50a446a3fe5ef0ed4"
+          test "$(sha256sum app/charts.py | cut -d' ' -f1)" = "dd74b9b0fc124f54a0c59e323b4bce97f40e7f7ebbd0d136eebac92b7c283643"
           test "$(sha256sum tests/test_charts.py | cut -d' ' -f1)" = "b2b4de0fe9768417bcb6498e8bed56aef54f7581e18b405ec12beb3a3dd6fb3f"
           pip install -r requirements.txt
           python -m compileall -q app tests
