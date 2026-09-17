@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from abc import ABC, abstractmethod
-from datetime import datetime, time, timezone
+from datetime import datetime, timezone
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
