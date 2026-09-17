@@ -1,0 +1,57 @@
+name: Fix 1D price chart candle rendering
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - APPLY_1D_PRICE_CHART_FIX
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: ${{ github.event.head_commit.message != 'Remove 1D price chart fix marker' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Fix daily candle routing
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('app/candlestick_chart.py')
+          s = p.read_text(encoding='utf-8')
+
+          old = '    is_1d = timeframe.upper().startswith("1D")\n'
+          new = '''    # Treat 1D as the daily candle interval used by /price. Only a true\n    # intraday 1-day chart such as 1d/15m should use the US-session frame.\n    interval_count, interval_unit = legacy._timeframe_interval(timeframe)\n    is_1d = timeframe.upper().startswith("1D") and interval_unit in {"m", "h"}\n    is_daily_candles = interval_count == 1 and interval_unit == "d"\n'''
+          if old not in s:
+              raise SystemExit('Target is_1d line not found')
+          s = s.replace(old, new, 1)
+
+          old = '''    else:\n        if first_close > 0:\n            change_percent = (last_price / first_close - 1.0) * 100.0\n        previous = first_close\n'''
+          new = '''    else:\n        if first_close > 0:\n            change_percent = (last_price / first_close - 1.0) * 100.0\n        # Keep the existing chart baseline for intraday/historical views. For\n        # the daily candle button, retain the quote's real previous close when\n        # available instead of relabelling the first historical candle as\n        # "Prev close". This changes no candle data.\n        if is_daily_candles and prev_close is not None and prev_close > 0:\n            previous = float(prev_close)\n        else:\n            previous = first_close\n'''
+          if old not in s:
+              raise SystemExit('Target previous-close block not found')
+          s = s.replace(old, new, 1)
+
+          p.write_text(s, encoding='utf-8')
+          PY
+          python -m compileall -q app
+
+      - name: Commit and remove one-time workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm APPLY_1D_PRICE_CHART_FIX .github/workflows/fix_1d_price_chart.yml
+          git add app/candlestick_chart.py
+          git commit -m 'Fix 1D price chart candle rendering'
+          git push origin HEAD:main
