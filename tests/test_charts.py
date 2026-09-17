@@ -29,6 +29,21 @@ def test_sub_cent_formatting_never_uses_scientific_notation():
     assert charts._fmt_value(12.5) == "12.50"
 
 
+def test_index_symbols_are_detected_without_provider_suffixes():
+    for symbol in ("^GSPC", "SP500", "S&P 500", "^NDX", "NASDAQ-100", "^IXIC", "NASDAQ Composite", "^DJI", "Dow Jones"):
+        assert charts._is_index_symbol(symbol) is True
+    assert charts._is_index_symbol("AAPL") is False
+
+
+def test_headline_change_colour_follows_displayed_change_not_chart_colour():
+    assert charts._change_colour(0.02) == charts._REGULAR_GREEN
+    assert charts._change_colour(2.0) == charts._REGULAR_GREEN
+    assert charts._change_colour(-0.02) == charts._REGULAR_RED
+    assert charts._change_colour(-2.0) == charts._REGULAR_RED
+    assert charts._change_colour(0.0) == charts._EXTENDED_GREY
+    assert charts._change_colour(None) == "#f8fafc"
+
+
 def test_us_frame_uses_real_observed_bounds():
     idx = pd.date_range("2026-09-11 13:00", periods=44, freq="15min", tz="UTC")
     frame = build_frame("NFE", idx[-1], "stock", observed_index=idx)
