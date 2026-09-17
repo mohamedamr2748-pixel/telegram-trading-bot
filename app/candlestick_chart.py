@@ -30,7 +30,7 @@ def _display_ticks(index: pd.DatetimeIndex, timeframe: str) -> tuple[pd.Datetime
     observed = observed.drop_duplicates().sort_values()
     count, unit = legacy._timeframe_interval(timeframe)
 
-    if unit in {"m", "h"}:
+    if (unit == "m" and count in {15, 30}) or (unit == "h" and count in {1, 4}):
         # Intraday labels must refer to real observed candles. We deliberately
         # do not create synthetic timestamps for missing market periods.
         tick_count = min(7, len(observed))
