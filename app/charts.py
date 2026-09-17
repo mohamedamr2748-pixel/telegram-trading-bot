@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import re
 
 import matplotlib
 matplotlib.use("Agg")
@@ -9,6 +10,7 @@ import matplotlib.pyplot as plt
 import mplfinance as mpf
 import pandas as pd
 from matplotlib.patches import FancyBboxPatch
+from matplotlib.ticker import FixedFormatter, FixedLocator
 
 from app.chart_sessions import SessionKind, TradingFrame, UTC, build_frame, classify_timestamp
 from app.domain import MarketQuote
@@ -20,6 +22,8 @@ _ADVANCED_DPI = 220
 _EXTENDED_GREY = "#9aa0a6"
 _REGULAR_GREEN = "#55e982"
 _REGULAR_RED = "#f26b63"
+
+_TIMEFRAME_RE = re.compile(r"^(?P<count>\d+)(?P<unit>mo|wk|w|d|h|m)$", re.IGNORECASE)
 
 _CHART_STYLE = mpf.make_mpf_style(
     base_mpf_style="nightclouds",
@@ -143,26 +147,6 @@ def _price_digits(symbol: str, quote: MarketQuote | None) -> int:
     return 2
 
 
-def _is_index_symbol(symbol: str) -> bool:
-    """Return True for user-facing or provider symbols representing indexes."""
-    normalized = "".join(ch for ch in (symbol or "").upper() if ch.isalnum())
-    return normalized in {
-        "GSPC", "SP500", "SPX", "NDX", "NASDAQ100", "IXIC", "NASDAQ",
-        "NASDAQCOMPOSITE", "DJI", "DOW", "DOWJONES",
-    }
-
-
-def _change_colour(change_percent: float | None) -> str:
-    """Colour the headline from the displayed period change, not chart session colour."""
-    if change_percent is None:
-        return "#f8fafc"
-    if change_percent > 1e-12:
-        return _REGULAR_GREEN
-    if change_percent < -1e-12:
-        return _REGULAR_RED
-    return _EXTENDED_GREY
-
-
 def _period_performance(series: pd.Series, timeframe: str, daily_change: float | None) -> float | None:
     if series.empty:
         return None
@@ -283,16 +267,13 @@ def _regular_session_performance(
     values,
     frame: TradingFrame | None,
 ) -> float | None:
-    """Return the movement across observed regular-session prices only."""
     if frame is None or frame.regular_utc is None:
         return None
-
     aware = pd.DatetimeIndex(index)
     if aware.tz is None:
         aware = aware.tz_localize(UTC)
     else:
         aware = aware.tz_convert(UTC)
-
     start, end = frame.regular_utc
     regular = pd.Series(values, index=aware)
     regular = pd.to_numeric(regular, errors="coerce")
@@ -346,7 +327,6 @@ def _selector_key(timeframe: str) -> str | None:
 
 
 def _draw_session_bands(ax, frame: TradingFrame, regular_colour: str) -> None:
-    """Show the fixed trading-session frame without inventing any prices."""
     if frame.premarket_utc is not None:
         start, end = frame.premarket_utc
         ax.axvspan(start.to_pydatetime(), end.to_pydatetime(), facecolor=_EXTENDED_GREY, alpha=0.035, zorder=0)
@@ -390,56 +370,79 @@ def _configure_us_equity_x_axis(ax, frame: TradingFrame) -> None:
     ax.xaxis.get_offset_text().set_visible(False)
 
 
-def _timeframe_key(timeframe: str) -> str:
-    """Return the price timeframe key without the renderer mode suffix."""
-    return timeframe.split("/", 1)[0].strip().upper()
+def _timeframe_interval(timeframe: str) -> tuple[int, str]:
+    parts = [part.strip().lower() for part in timeframe.split("/") if part.strip()]
+    for raw_interval in reversed(parts):
+        match = _TIMEFRAME_RE.fullmatch(raw_interval)
+        if match is not None:
+            return int(match.group("count")), match.group("unit")
+    return 1, "d"
 
 
-def _is_session_intraday_chart(timeframe: str) -> bool:
-    """Only the standalone /chart one-day intraday view uses session framing."""
-    raw = timeframe.split("/", 1)
-    if len(raw) != 2:
-        return False
-    return raw[0].strip().lower() == "1d"
+def _timestamp_tick_step(timeframe: str, span: pd.Timedelta) -> pd.Timedelta:
+    count, unit = _timeframe_interval(timeframe)
+    base_seconds = count * {"m": 60, "h": 60 * 60, "d": 24 * 60 * 60, "w": 7 * 24 * 60 * 60, "wk": 7 * 24 * 60 * 60, "mo": 30 * 24 * 60 * 60}[unit]
+    multiples = {
+        "m": (1, 2, 3, 5, 10, 15, 30, 60, 120, 240, 360, 720, 1440),
+        "h": (1, 2, 3, 4, 6, 8, 12, 24, 48, 72, 168),
+        "d": (1, 2, 3, 5, 7, 14, 30, 60, 90, 180, 365),
+        "w": (1, 2, 4, 8, 13, 26, 52),
+        "wk": (1, 2, 4, 8, 13, 26, 52),
+        "mo": (1, 2, 3, 6, 12),
+    }[unit]
+    span_seconds = max(span.total_seconds(), 0.0)
+    multiple = next((value for value in multiples if span_seconds / (base_seconds * value) <= 8), multiples[-1])
+    return pd.Timedelta(seconds=base_seconds * multiple)
 
 
-def _configure_price_x_axis(ax, timeframe: str, index: pd.DatetimeIndex) -> None:
-    """Configure X-axis labels from the candle timeframe, not from a hard-coded format.
+def _observed_timestamp_ticks(index: pd.DatetimeIndex, timeframe: str) -> pd.DatetimeIndex:
+    observed = _display_index(index, "")
+    if not len(observed):
+        return observed
+    observed = observed.drop_duplicates().sort_values()
+    step = _timestamp_tick_step(timeframe, observed[-1] - observed[0])
+    ticks = [observed[0]]
+    next_target = observed[0] + step
+    for timestamp in observed[1:]:
+        if timestamp >= next_target:
+            ticks.append(timestamp)
+            next_target = timestamp + step
+    if ticks[-1] != observed[-1]:
+        ticks.append(observed[-1])
+    return pd.DatetimeIndex(ticks)
 
-    Price buttons represent candle intervals:
-      1M/5M/15M/30M/1H/4H -> intraday timestamps
-      1D/1W              -> date timestamps
-      1MO                -> month/year timestamps
-    All labels are UTC to match the rest of the price card.
-    """
-    key = _timeframe_key(timeframe)
-    timestamps = pd.DatetimeIndex(index)
-    if len(timestamps) == 0:
+
+def _timestamp_tick_labels(ticks: pd.DatetimeIndex, timeframe: str) -> list[str]:
+    if len(ticks) <= 1:
+        return [ticks[0].strftime("%H:%M")] if len(ticks) else []
+    count, unit = _timeframe_interval(timeframe)
+    span = ticks[-1] - ticks[0]
+    if unit in {"m", "h"}:
+        date_format = "%d %b\n%H:%M" if span >= pd.Timedelta(days=2) else "%H:%M"
+    elif unit == "mo":
+        date_format = "%b %Y"
+    else:
+        date_format = "%b %Y" if span >= pd.Timedelta(days=365) else "%d %b"
+    return [timestamp.strftime(date_format) for timestamp in ticks]
+
+
+def _configure_observed_timestamp_ticks(
+    ax,
+    index: pd.DatetimeIndex,
+    timeframe: str,
+    visible_bounds: tuple[pd.Timestamp, pd.Timestamp] | None = None,
+) -> None:
+    observed = _display_index(index, "")
+    if visible_bounds is not None:
+        lower, upper = visible_bounds
+        observed = observed[(observed >= lower) & (observed <= upper)]
+    ticks = _observed_timestamp_ticks(observed, timeframe)
+    if not len(ticks):
         return
-    if timestamps.tz is None:
-        timestamps = timestamps.tz_localize(UTC)
-    else:
-        timestamps = timestamps.tz_convert(UTC)
-
-    x_min = timestamps[0]
-    x_max = timestamps[-1]
-    if x_max <= x_min:
-        x_max = x_min + pd.Timedelta(minutes=30)
-    ax.set_xlim(x_min.to_pydatetime(), x_max.to_pydatetime())
-
-    locator = mdates.AutoDateLocator(minticks=4, maxticks=6, interval_multiples=True)
-    ax.xaxis.set_major_locator(locator)
-    if key == "1M":
-        fmt = "%H:%M"
-    elif key in {"5M", "15M", "30M", "1H", "4H"}:
-        fmt = "%d %b\n%H:%M"
-    elif key in {"1D", "1W"}:
-        fmt = "%d %b"
-    elif key == "1MO":
-        fmt = "%b %Y"
-    else:
-        fmt = "%d %b\n%H:%M"
-    ax.xaxis.set_major_formatter(mdates.DateFormatter(fmt, tz=UTC))
+    positions = mdates.date2num(ticks.to_pydatetime())
+    labels = _timestamp_tick_labels(ticks, timeframe)
+    ax.xaxis.set_major_locator(FixedLocator(positions))
+    ax.xaxis.set_major_formatter(FixedFormatter(labels))
     ax.xaxis.get_offset_text().set_visible(False)
 
 
@@ -471,17 +474,16 @@ async def render_google_finance_chart(
         elif change_percent is None:
             change_percent = quote.change_percent
 
-    timeframe_key = _timeframe_key(timeframe)
-    session_intraday = _is_session_intraday_chart(timeframe)
+    is_1d = timeframe.upper().startswith("1D")
     frame = build_frame(
         symbol,
         work.index[-1],
         quote.asset_class if quote else None,
         observed_index=work.index,
-    ) if session_intraday else None
+    ) if is_1d else None
     trading_date_iso = frame.trading_date.isoformat() if frame and frame.trading_date else None
 
-    if quote is not None and quote.source == "yfinance" and session_intraday:
+    if quote is not None and quote.source == "yfinance" and is_1d:
         corrected_previous = await _correct_yfinance_previous_close(symbol, quote, timeframe, trading_date_iso)
         if corrected_previous is not None:
             prev_close = corrected_previous
@@ -491,7 +493,7 @@ async def render_google_finance_chart(
     last_price = float(price) if price is not None else float(work["Close"].iloc[-1])
     previous = float(prev_close) if prev_close and prev_close > 0 else None
     first_close = float(work["Close"].iloc[0])
-    if timeframe_key == "1D":
+    if is_1d:
         if change_percent is None and previous:
             change_percent = (last_price / previous - 1.0) * 100.0
         elif change_percent is None and first_close > 0 and len(work) >= 2:
@@ -501,13 +503,13 @@ async def render_google_finance_chart(
             change_percent = (last_price / first_close - 1.0) * 100.0
         previous = first_close
 
-    period_perf = _period_performance(work["Close"], timeframe_key, change_percent)
+    period_perf = _period_performance(work["Close"], timeframe, change_percent)
     regular_perf = _regular_session_performance(work.index, work["Close"], frame) if frame is not None else None
     colour_perf = regular_perf if frame is not None else period_perf
     line_color = _REGULAR_GREEN if colour_perf is not None and colour_perf > 1e-12 else _REGULAR_RED if colour_perf is not None and colour_perf < -1e-12 else _EXTENDED_GREY
     stats = _regular_session_stats(work, frame, symbol) if frame is not None else _session_stats(work, symbol)
     digits = _price_digits(symbol, quote)
-    currency_text = "" if _is_index_symbol(symbol) else (f" {currency}" if currency else "")
+    currency_text = f" {currency}" if currency else ""
 
     fig = plt.figure(figsize=_STANDARD_FIGSIZE, dpi=_STANDARD_DPI, facecolor="#202124")
     ax = fig.add_axes([0.035, 0.30, 0.865, 0.56])
@@ -542,14 +544,18 @@ async def render_google_finance_chart(
 
     if frame is not None:
         _configure_us_equity_x_axis(ax, frame)
+        _configure_observed_timestamp_ticks(ax, work.index, timeframe, visible_bounds=(frame.x_min_utc, frame.x_max_utc))
     else:
-        _configure_price_x_axis(ax, timeframe_key, work.index)
+        x = work.index.to_pydatetime()
+        if len(x) > 1:
+            ax.set_xlim(x[0], x[-1])
+        _configure_observed_timestamp_ticks(ax, work.index, timeframe)
 
     price_line = f"{_fmt_value(last_price, digits)}{currency_text}"
     if period_perf is not None:
         price_line += f"  {period_perf:+.2f}%"
     ax.text(0.0, 1.19, symbol.upper(), transform=ax.transAxes, ha="left", va="bottom", fontsize=20, fontweight="bold", color="#f8fafc")
-    ax.text(0.0, 1.065, price_line, transform=ax.transAxes, ha="left", va="bottom", fontsize=18, fontweight="bold", color=_change_colour(period_perf),)
+    ax.text(0.0, 1.065, price_line, transform=ax.transAxes, ha="left", va="bottom", fontsize=18, fontweight="bold", color=line_color if period_perf is not None else "#f8fafc")
 
     selector = ["1D", "5D", "1M", "6M", "YTD", "1Y", "5Y"]
     selected = _selector_key(timeframe)
