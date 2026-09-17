@@ -6,97 +6,53 @@ from html import escape
 
 import pandas as pd
 from aiogram import F
-from aiogram.types import (
-    BufferedInputFile,
-    CallbackQuery,
-    CopyTextButton,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    InputMediaPhoto,
-    Message,
-)
+from aiogram.types import BufferedInputFile, CallbackQuery, CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, Message
 
 from app.chart_display_symbols import chart_display_symbol
 from app.charts import render_chart
 from app.market import MarketService
 from app.movers import Mover, get_top_movers
 
-
 SYMBOLS = ["^GSPC", "^NDX", "^DJI", "BTC-USD", "GC=F"]
-LABELS = {
-    "^GSPC": "S&P 500",
-    "^NDX": "NASDAQ-100",
-    "^DJI": "Dow Jones",
-    "BTC-USD": "Bitcoin",
-    "GC=F": "Gold",
-}
+LABELS = {"^GSPC": "S&P 500", "^NDX": "NASDAQ-100", "^DJI": "Dow Jones", "BTC-USD": "Bitcoin", "GC=F": "Gold"}
 PRICE_DIGITS = {symbol: 2 for symbol in SYMBOLS}
 
-# /price chart presets. 4H is the default to match the requested layout.
 PRICE_TIMEFRAMES: dict[str, tuple[str, str, str | None]] = {
-    "1M": ("1d", "1m", None),
-    "5M": ("5d", "5m", None),
-    "15M": ("1mo", "15m", None),
-    "30M": ("1mo", "30m", None),
-    "1H": ("6mo", "1h", None),
-    "4H": ("6mo", "1h", "4h"),
-    "1D": ("1y", "1d", None),
-    "1W": ("5y", "1wk", None),
-    "1MO": ("max", "1mo", None),
+    "1M": ("1d", "1m", None), "5M": ("5d", "5m", None), "15M": ("1mo", "15m", None),
+    "30M": ("1mo", "30m", None), "1H": ("6mo", "1h", None), "4H": ("6mo", "1h", "4h"),
+    "1D": ("1d", "15m", None), "1W": ("5y", "1wk", None), "1MO": ("max", "1mo", None),
 }
 
-
 def _pct(value: float | None) -> str:
-    if value is None:
-        return "n/a"
-    return f"{value:+.2f}%"
-
+    return "n/a" if value is None else f"{value:+.2f}%"
 
 def _badge(value: float | None) -> str:
-    if value is None:
-        return "n/a"
-    if value > 0:
-        return f"🟢 {_pct(value)}"
-    if value < 0:
-        return f"🔴 {_pct(value)}"
+    if value is None: return "n/a"
+    if value > 0: return f"🟢 {_pct(value)}"
+    if value < 0: return f"🔴 {_pct(value)}"
     return "0.00%"
 
-
 def _price(symbol: str, value: float | None) -> str:
-    if value is None:
-        return "n/a"
-    return f"{value:,.{PRICE_DIGITS.get(symbol, 2)}f}"
-
+    return "n/a" if value is None else f"{value:,.{PRICE_DIGITS.get(symbol, 2)}f}"
 
 def _session_label(status: str | None) -> str:
     value = (status or "").upper().replace("_", " ")
-    if "PRE" in value:
-        return "🟡 Pre-market"
-    if "POST" in value or "AFTER" in value:
-        return "🟠 After-hours"
-    if "REGULAR" in value or value == "OPEN":
-        return "🟢 Open"
-    if "CLOSED" in value:
-        return "🔴 Closed"
+    if "PRE" in value: return "🟡 Pre-market"
+    if "POST" in value or "AFTER" in value: return "🟠 After-hours"
+    if "REGULAR" in value or value == "OPEN": return "🟢 Open"
+    if "CLOSED" in value: return "🔴 Closed"
     return "Unknown"
-
 
 def _market_tone(quotes: list[object]) -> str:
     moves = [float(q.change_percent) for q in quotes if hasattr(q, "change_percent") and q.change_percent is not None]
-    if not moves:
-        return "🟡 Mixed"
-    positives = sum(value > 0 for value in moves)
-    negatives = sum(value < 0 for value in moves)
-    if positives > negatives:
-        return "🟢 Positive"
-    if negatives > positives:
-        return "🔴 Negative"
+    if not moves: return "🟡 Mixed"
+    positives, negatives = sum(v > 0 for v in moves), sum(v < 0 for v in moves)
+    if positives > negatives: return "🟢 Positive"
+    if negatives > positives: return "🔴 Negative"
     return "🟡 Mixed"
-
 
 def _mover_line(mover: Mover, positive: bool) -> str:
     return f"<code>{escape(mover.symbol)}</code>  <b>{_pct(mover.percent_change)}</b>"
-
 
 def _market_keyboard(gainers: tuple[Mover, ...], losers: tuple[Mover, ...]) -> InlineKeyboardMarkup:
     rows = [
@@ -106,383 +62,173 @@ def _market_keyboard(gainers: tuple[Mover, ...], losers: tuple[Mover, ...]) -> I
         [InlineKeyboardButton(text="🔄 Refresh", callback_data="marketv2:refresh")],
     ]
     movers = [*gainers, *losers][:6]
-    for start in range(0, len(movers), 2):
-        rows.append([InlineKeyboardButton(text=row.symbol[:10], callback_data=f"marketv2:chart:{row.symbol}") for row in movers[start:start + 2]])
+    for start in range(0, len(movers), 2): rows.append([InlineKeyboardButton(text=row.symbol[:10], callback_data=f"marketv2:chart:{row.symbol}") for row in movers[start:start + 2]])
     return InlineKeyboardMarkup(inline_keyboard=rows)
-
 
 async def _snapshot(market: MarketService) -> tuple[str, InlineKeyboardMarkup]:
     quotes = await asyncio.gather(*(market.get_quote(symbol) for symbol in SYMBOLS), return_exceptions=True)
     gainers, losers = await get_top_movers()
-    valid_quotes = [quote for quote in quotes if not isinstance(quote, Exception)]
-
+    valid_quotes = [q for q in quotes if not isinstance(q, Exception)]
     us_status = _session_label(getattr(quotes[0], "market_status", None) if not isinstance(quotes[0], Exception) else None)
-    lines = [
-        "🌍 <b>MARKET OVERVIEW</b>",
-        "━━━━━━━━━━━━━━━━",
-        "",
-        "🇺🇸 <b>US MARKETS</b>",
-        "",
-    ]
+    lines = ["🌍 <b>MARKET OVERVIEW</b>", "━━━━━━━━━━━━━━━━", "", "🇺🇸 <b>US MARKETS</b>", ""]
     for symbol, quote in zip(SYMBOLS[:3], quotes[:3]):
-        if isinstance(quote, Exception):
-            lines.append(f"<b>{LABELS[symbol]}</b>  <code>n/a</code>  unavailable")
-        else:
-            lines.append(f"<b>{LABELS[symbol]}</b>  <code>{_price(symbol, quote.price)}</code>  {_badge(quote.change_percent)}")
-
+        if isinstance(quote, Exception): lines.append(f"<b>{LABELS[symbol]}</b>  <code>n/a</code>  unavailable")
+        else: lines.append(f"<b>{LABELS[symbol]}</b>  <code>{_price(symbol, quote.price)}</code>  {_badge(quote.change_percent)}")
     lines.extend(["", f"US Market: {us_status}", "", "🪙 <b>CRYPTO</b>", ""])
     btc = quotes[3]
-    if isinstance(btc, Exception):
-        lines.append("<b>Bitcoin</b>  <code>n/a</code>  unavailable")
-    else:
-        lines.append(f"<b>Bitcoin</b>  <code>{_price('BTC-USD', btc.price)}</code>  {_badge(btc.change_percent)}")
-
+    if isinstance(btc, Exception): lines.append("<b>Bitcoin</b>  <code>n/a</code>  unavailable")
+    else: lines.append(f"<b>Bitcoin</b>  <code>{_price('BTC-USD', btc.price)}</code>  {_badge(btc.change_percent)}")
     lines.extend(["", "🥇 <b>COMMODITIES</b>", ""])
     gold = quotes[4]
-    if isinstance(gold, Exception):
-        lines.append("<b>Gold</b>  <code>n/a</code>  unavailable")
-    else:
-        lines.append(f"<b>Gold</b>  <code>{_price('GC=F', gold.price)}</code>  {_badge(gold.change_percent)}")
-
+    if isinstance(gold, Exception): lines.append("<b>Gold</b>  <code>n/a</code>  unavailable")
+    else: lines.append(f"<b>Gold</b>  <code>{_price('GC=F', gold.price)}</code>  {_badge(gold.change_percent)}")
     lines.extend(["", "━━━━━━━━━━━━━━━━", "", "🔥 <b>TOP MOVERS</b>", ""])
-    if gainers:
-        lines.append("<b>GAINERS</b>")
-        lines.extend(_mover_line(row, True) for row in gainers)
-    else:
-        lines.append("Gainers unavailable right now.")
+    if gainers: lines.extend(["<b>GAINERS</b>", *[_mover_line(row, True) for row in gainers]])
+    else: lines.append("Gainers unavailable right now.")
     lines.append("")
-    if losers:
-        lines.append("<b>LOSERS</b>")
-        lines.extend(_mover_line(row, False) for row in losers)
-    else:
-        lines.append("Losers unavailable right now.")
-
+    if losers: lines.extend(["<b>LOSERS</b>", *[_mover_line(row, False) for row in losers]])
+    else: lines.append("Losers unavailable right now.")
     updated = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
     lines.extend(["", "━━━━━━━━━━━━━━━━", f"📊 Market tone: <b>{_market_tone(valid_quotes)}</b>", f"🕐 Updated: <code>{updated}</code>"])
     return "\n".join(lines), _market_keyboard(gainers, losers)
 
-
 async def market_cmd(message: Message) -> None:
-    text, keyboard = await _snapshot(MarketService())
-    await message.answer(text, reply_markup=keyboard)
-
+    text, keyboard = await _snapshot(MarketService()); await message.answer(text, reply_markup=keyboard)
 
 async def _market_chart(callback: CallbackQuery, symbol: str) -> None:
     from app.bot import limit_for_user, ticker_format_image
-
     if not await limit_for_user(callback.from_user.id, callback.from_user.username, "chart"):
-        await callback.message.answer("⚠️ Free plan limit reached: <b>10/day</b> for chart.")
-        return
-
+        await callback.message.answer("⚠️ Free plan limit reached: <b>10/day</b> for chart."); return
     try:
-        market = MarketService()
-        df = await market.get_history(symbol, period="1d", interval="15m")
-        display_symbol = chart_display_symbol(symbol)
-        image = await render_chart(df, display_symbol, "1d/15m")
-        caption = f"📈 <b>{display_symbol}</b> • 1d/15m • UTC"
-        await callback.message.answer_photo(
-            BufferedInputFile(image.getvalue(), filename=f"{symbol}.png"),
-            caption=caption,
-        )
+        df = await MarketService().get_history(symbol, period="1d", interval="15m")
+        display_symbol = chart_display_symbol(symbol); image = await render_chart(df, display_symbol, "1d/15m")
+        await callback.message.answer_photo(BufferedInputFile(image.getvalue(), filename=f"{symbol}.png"), caption=f"📈 <b>{display_symbol}</b> • 1d/15m • UTC")
     except ValueError:
-        guide = ticker_format_image()
-        await callback.message.answer_photo(
-            BufferedInputFile(guide.getvalue(), filename="ticker-format-guide.png"),
-            caption=(
-                f"❌ <b>Invalid ticker</b>\n\n"
-                f"We couldn't find chart data for <code>{symbol}</code>.\n\n"
-                "Please check the ticker format and try again."
-            ),
-        )
-    except Exception:
-        await callback.message.answer(f"⚠️ We couldn't generate a chart for <b>{symbol}</b> right now. Please try again later.")
-
+        guide = ticker_format_image(); await callback.message.answer_photo(BufferedInputFile(guide.getvalue(), filename="ticker-format-guide.png"), caption=f"❌ <b>Invalid ticker</b>\n\nWe couldn't find chart data for <code>{symbol}</code>.\n\nPlease check the ticker format and try again.")
+    except Exception: await callback.message.answer(f"⚠️ We couldn't generate a chart for <b>{symbol}</b> right now. Please try again later.")
 
 def _normalise_price_symbol(symbol: str) -> str:
     raw = chart_display_symbol(symbol)
-    if raw.endswith("-USD"):
-        return f"{raw[:-4]}/USD"
-    if len(raw) == 6 and raw.isalpha():
-        return f"{raw[:3]}/{raw[3:]}"
+    if raw.endswith("-USD"): return f"{raw[:-4]}/USD"
+    if len(raw) == 6 and raw.isalpha(): return f"{raw[:3]}/{raw[3:]}"
     return raw
 
-
 def _format_price_value(value: float | None, quote: object | None) -> str:
-    if value is None:
-        return "n/a"
+    if value is None: return "n/a"
     asset = str(getattr(quote, "asset_class", "")).lower() if quote is not None else ""
-    if asset == "forex":
-        decimals = 3 if "JPY" in _normalise_price_symbol(str(getattr(quote, "symbol", ""))) else 5
-    elif abs(float(value)) < 1:
-        decimals = 6
-    else:
-        decimals = 2
+    if asset == "forex": decimals = 3 if "JPY" in _normalise_price_symbol(str(getattr(quote, "symbol", ""))) else 5
+    elif abs(float(value)) < 1: decimals = 6
+    else: decimals = 2
     return f"{float(value):,.{decimals}f}"
 
-
 def _format_volume(value: float | None) -> str:
-    if value is None:
-        return "n/a"
-    number = float(value)
-    magnitude = abs(number)
-    if magnitude >= 1_000_000_000_000:
-        return f"{number / 1_000_000_000_000:.2f}T"
-    if magnitude >= 1_000_000_000:
-        return f"{number / 1_000_000_000:.2f}B"
-    if magnitude >= 1_000_000:
-        return f"{number / 1_000_000:.2f}M"
-    if magnitude >= 1_000:
-        return f"{number / 1_000:.2f}K"
+    if value is None: return "n/a"
+    number, magnitude = float(value), abs(float(value))
+    if magnitude >= 1_000_000_000_000: return f"{number / 1_000_000_000_000:.2f}T"
+    if magnitude >= 1_000_000_000: return f"{number / 1_000_000_000:.2f}B"
+    if magnitude >= 1_000_000: return f"{number / 1_000_000:.2f}M"
+    if magnitude >= 1_000: return f"{number / 1_000:.2f}K"
     return f"{number:,.0f}"
 
-
 def _resample_ohlcv(df: pd.DataFrame, rule: str) -> pd.DataFrame:
-    if df.empty:
-        return df
-    work = df.copy()
-    work.index = pd.to_datetime(work.index, utc=True, errors="coerce")
-    work = work[work.index.notna()].sort_index()
+    if df.empty: return df
+    work = df.copy(); work.index = pd.to_datetime(work.index, utc=True, errors="coerce"); work = work[work.index.notna()].sort_index()
     agg = {}
-    if "Open" in work.columns:
-        agg["Open"] = "first"
-    if "High" in work.columns:
-        agg["High"] = "max"
-    if "Low" in work.columns:
-        agg["Low"] = "min"
-    if "Close" in work.columns:
-        agg["Close"] = "last"
-    if "Volume" in work.columns:
-        agg["Volume"] = "sum"
-    if "Close" not in agg:
-        raise ValueError("No Close column available for price chart")
-    result = work.resample(rule, label="right", closed="right").agg(agg)
-    return result.dropna(subset=["Close"])
-
+    for col, fn in (("Open", "first"), ("High", "max"), ("Low", "min"), ("Close", "last"), ("Volume", "sum")):
+        if col in work.columns: agg[col] = fn
+    if "Close" not in agg: raise ValueError("No Close column available for price chart")
+    return work.resample(rule, label="right", closed="right").agg(agg).dropna(subset=["Close"])
 
 async def _get_price_history(symbol: str, timeframe: str) -> pd.DataFrame:
     preset = PRICE_TIMEFRAMES.get(timeframe)
-    if preset is None:
-        raise ValueError(f"Unsupported timeframe: {timeframe}")
+    if preset is None: raise ValueError(f"Unsupported timeframe: {timeframe}")
     period, interval, resample_rule = preset
-    market = MarketService()
-    df = await market.get_history(symbol, period=period, interval=interval)
-    if resample_rule:
-        df = _resample_ohlcv(df, resample_rule)
-    # Keep the visual density stable and close to the requested 120-candle layout.
+    df = await MarketService().get_history(symbol, period=period, interval=interval)
+    if resample_rule: df = _resample_ohlcv(df, resample_rule)
     return df.tail(120).copy()
 
-
-def _price_caption(
-    symbol: str,
-    timeframe: str,
-    df: pd.DataFrame,
-    quote: object,
-) -> tuple[str, str]:
-    display_symbol = _normalise_price_symbol(symbol)
-    work = df.copy()
-    close = pd.to_numeric(work["Close"], errors="coerce").dropna()
-    last = float(close.iloc[-1]) if not close.empty else float(getattr(quote, "price"))
-    first = float(close.iloc[0]) if not close.empty else last
+def _price_caption(symbol: str, timeframe: str, df: pd.DataFrame, quote: object) -> tuple[str, str]:
+    display_symbol = _normalise_price_symbol(symbol); work = df.copy(); close = pd.to_numeric(work["Close"], errors="coerce").dropna()
+    last = float(close.iloc[-1]) if not close.empty else float(getattr(quote, "price")); first = float(close.iloc[0]) if not close.empty else last
     change = ((last / first) - 1.0) * 100.0 if first else None
-    high = float(pd.to_numeric(work["High"], errors="coerce").max()) if "High" in work else last
-    low = float(pd.to_numeric(work["Low"], errors="coerce").min()) if "Low" in work else last
-    volume = float(pd.to_numeric(work["Volume"], errors="coerce").sum()) if "Volume" in work else None
-    candle_count = len(work)
-
-    # Keep the chart image itself untouched. The quote card below it uses the requested
-    # monospaced layout and provides a real clipboard button for the current price.
-    info = (
-        f"{display_symbol:<12} | {timeframe:<3} | {candle_count} candles\n"
-        f"Last: ${_format_price_value(last, quote)} ({_pct(change)})\n"
-        f"High: ${_format_price_value(high, quote)}\n"
-        f"Low: ${_format_price_value(low, quote)}\n"
-        f"Vol: {_format_volume(volume)}\n"
-        f"Source: {getattr(quote, 'source', 'unknown')}"
-    )
-    copy_price = _format_price_value(float(getattr(quote, "price")), quote)
-    caption = f"<pre>{escape(info)}</pre>"
-    return caption, copy_price
-
+    high = float(pd.to_numeric(work["High"], errors="coerce").max()) if "High" in work else last; low = float(pd.to_numeric(work["Low"], errors="coerce").min()) if "Low" in work else last
+    volume = float(pd.to_numeric(work["Volume"], errors="coerce").sum()) if "Volume" in work else None; candle_count = len(work)
+    info = f"{display_symbol:<12} | {timeframe:<3} | {candle_count} candles\nLast: ${_format_price_value(last, quote)} ({_pct(change)})\nHigh: ${_format_price_value(high, quote)}\nLow: ${_format_price_value(low, quote)}\nVol: {_format_volume(volume)}\nSource: {getattr(quote, 'source', 'unknown')}"
+    return f"<pre>{escape(info)}</pre>", _format_price_value(float(getattr(quote, "price")), quote)
 
 def _price_keyboard(symbol: str, timeframe: str, copy_price: str) -> InlineKeyboardMarkup:
-    tf_rows: list[list[InlineKeyboardButton]] = []
-    first_row = ["1M", "5M", "15M", "30M", "1H"]
-    second_row = ["4H", "1D", "1W", "1MO"]
-    for group in (first_row, second_row):
+    tf_rows = []
+    for group in (("1M", "5M", "15M", "30M", "1H"), ("4H", "1D", "1W", "1MO")):
         row = []
         for item in group:
             kwargs = {"callback_data": f"priceui:t:{item}:{symbol}"}
-            if item == timeframe:
-                kwargs["style"] = "primary"
+            if item == timeframe: kwargs["style"] = "primary"
             row.append(InlineKeyboardButton(text=item if item != timeframe else f"• {item} •", **kwargs))
         tf_rows.append(row)
+    return InlineKeyboardMarkup(inline_keyboard=[*tf_rows, [InlineKeyboardButton(text="🔄 Refresh", callback_data=f"priceui:r:{timeframe}:{symbol}", style="success"), InlineKeyboardButton(text="📋 Copy price", copy_text=CopyTextButton(text=copy_price))]])
 
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            *tf_rows,
-            [InlineKeyboardButton(text="🔄 Refresh", callback_data=f"priceui:r:{timeframe}:{symbol}", style="success"),
-             InlineKeyboardButton(text="📋 Copy price", copy_text=CopyTextButton(text=copy_price))],
-        ]
-    )
-
-
-async def _send_price_card(
-    target: Message | CallbackQuery,
-    symbol: str,
-    timeframe: str,
-    *,
-    edit: bool = False,
-) -> bool:
+async def _send_price_card(target: Message | CallbackQuery, symbol: str, timeframe: str, *, edit: bool = False) -> bool:
     from app.bot import limit_for_user, ticker_format_image
-
     user = target.from_user
     if not await limit_for_user(user.id, user.username, "price"):
-        message = target.message if isinstance(target, CallbackQuery) else target
-        await message.answer("⚠️ Free plan limit reached: <b>50/day</b> for price.")
-        return False
-
+        message = target.message if isinstance(target, CallbackQuery) else target; await message.answer("⚠️ Free plan limit reached: <b>50/day</b> for price."); return False
     try:
-        market = MarketService()
-        quote = await market.get_quote(symbol)
-        df = await _get_price_history(symbol, timeframe)
-        if df.empty:
-            raise ValueError("No chart data returned")
-
+        market = MarketService(); quote = await market.get_quote(symbol); df = await _get_price_history(symbol, timeframe)
+        if df.empty: raise ValueError("No chart data returned")
         display_symbol = chart_display_symbol(symbol)
-        image = await render_chart(
-            df,
-            display_symbol,
-            f"{timeframe}/chart",
-            prev_close=getattr(quote, "previous_close", None),
-            price=getattr(quote, "price", None),
-            quote=quote,
-        )
-        caption, copy_price = _price_caption(symbol, timeframe, df, quote)
-        keyboard = _price_keyboard(symbol, timeframe, copy_price)
-        media = BufferedInputFile(image.getvalue(), filename=f"{symbol.replace('/', '_')}.png")
-
+        image = await render_chart(df, display_symbol, f"{timeframe}/chart", prev_close=getattr(quote, "previous_close", None), price=getattr(quote, "price", None), quote=quote)
+        caption, copy_price = _price_caption(symbol, timeframe, df, quote); keyboard = _price_keyboard(symbol, timeframe, copy_price); media = BufferedInputFile(image.getvalue(), filename=f"{symbol.replace('/', '_')}.png")
         if edit and isinstance(target, CallbackQuery):
-            await target.message.edit_media(
-                media=InputMediaPhoto(
-                    media=media,
-                    caption=caption,
-                    parse_mode="HTML",
-                ),
-                reply_markup=keyboard,
-            )
+            await target.message.edit_media(media=InputMediaPhoto(media=media, caption=caption, parse_mode="HTML"), reply_markup=keyboard)
         else:
-            message = target.message if isinstance(target, CallbackQuery) else target
-            await message.answer_photo(
-                media,
-                caption=caption,
-                reply_markup=keyboard,
-            )
+            message = target.message if isinstance(target, CallbackQuery) else target; await message.answer_photo(media, caption=caption, reply_markup=keyboard)
         return True
     except ValueError:
-        message = target.message if isinstance(target, CallbackQuery) else target
-        guide = ticker_format_image()
-        await message.answer_photo(
-            BufferedInputFile(guide.getvalue(), filename="ticker-format-guide.png"),
-            caption=(
-                f"❌ <b>Invalid ticker</b>\n\n"
-                f"We couldn't find price/chart data for <code>{symbol}</code>.\n\n"
-                "Please check the ticker format and try again."
-            ),
-        )
-        return False
+        message = target.message if isinstance(target, CallbackQuery) else target; guide = ticker_format_image(); await message.answer_photo(BufferedInputFile(guide.getvalue(), filename="ticker-format-guide.png"), caption=f"❌ <b>Invalid ticker</b>\n\nWe couldn't find price/chart data for <code>{symbol}</code>.\n\nPlease check the ticker format and try again."); return False
     except Exception:
-        message = target.message if isinstance(target, CallbackQuery) else target
-        await message.answer(
-            f"⚠️ We couldn't generate the <b>{timeframe}</b> price chart for <b>{symbol}</b> right now. Please try again later."
-        )
-        return False
-
+        message = target.message if isinstance(target, CallbackQuery) else target; await message.answer(f"⚠️ We couldn't generate the <b>{timeframe}</b> price chart for <b>{symbol}</b> right now. Please try again later."); return False
 
 async def price_cmd(message: Message) -> None:
     parts = message.text.split(maxsplit=1) if message.text else []
-    if len(parts) != 2:
-        await message.answer("Usage: <code>/price AAPL</code>")
-        return
-    symbol = parts[1].strip().upper()
-    await _send_price_card(message, symbol, "4H")
-
+    if len(parts) != 2: await message.answer("Usage: <code>/price AAPL</code>"); return
+    await _send_price_card(message, parts[1].strip().upper(), "4H")
 
 async def _price_callback(callback: CallbackQuery) -> None:
-    data = callback.data or ""
-    parts = data.split(":", 3)
-    if len(parts) != 4:
-        await callback.answer()
-        return
-
-    _, action, timeframe, symbol = parts
-    timeframe = timeframe.upper()
-    if timeframe not in PRICE_TIMEFRAMES:
-        await callback.answer("Unsupported timeframe", show_alert=True)
-        return
-
-    if action not in {"t", "r"}:
-        await callback.answer()
-        return
-
-    ok = await _send_price_card(callback, symbol, timeframe, edit=True)
-    await callback.answer("Updated" if ok else "Could not update this chart", show_alert=not ok)
-
+    data = callback.data or ""; parts = data.split(":", 3)
+    if len(parts) != 4: await callback.answer(); return
+    _, action, timeframe, symbol = parts; timeframe = timeframe.upper()
+    if timeframe not in PRICE_TIMEFRAMES: await callback.answer("Unsupported timeframe", show_alert=True); return
+    if action not in {"t", "r"}: await callback.answer(); return
+    ok = await _send_price_card(callback, symbol, timeframe, edit=True); await callback.answer("Updated" if ok else "Could not update this chart", show_alert=not ok)
 
 async def _market_callback(callback: CallbackQuery) -> None:
-    data = callback.data or ""
-    action = data.split(":", 2)
-    if len(action) < 2:
-        await callback.answer()
-        return
+    data = callback.data or ""; action = data.split(":", 2)
+    if len(action) < 2: await callback.answer(); return
     kind = action[1]
     if kind == "refresh":
         text, keyboard = await _snapshot(MarketService())
-        try:
-            await callback.message.edit_text(text, reply_markup=keyboard)
-        except Exception:
-            pass
-        await callback.answer("Market refreshed")
-        return
+        try: await callback.message.edit_text(text, reply_markup=keyboard)
+        except Exception: pass
+        await callback.answer("Market refreshed"); return
     if kind == "movers":
-        gainers, losers = await get_top_movers()
-        lines = ["🔥 <b>TOP MOVERS</b>", ""]
-        if gainers:
-            lines.append("<b>GAINERS</b>")
-            lines.extend(_mover_line(row, True) for row in gainers)
-        else:
-            lines.append("Gainers unavailable right now.")
+        gainers, losers = await get_top_movers(); lines = ["🔥 <b>TOP MOVERS</b>", ""]
+        if gainers: lines.extend(["<b>GAINERS</b>", *[_mover_line(row, True) for row in gainers]])
+        else: lines.append("Gainers unavailable right now.")
         lines.append("")
-        if losers:
-            lines.append("<b>LOSERS</b>")
-            lines.extend(_mover_line(row, False) for row in losers)
-        else:
-            lines.append("Losers unavailable right now.")
+        if losers: lines.extend(["<b>LOSERS</b>", *[_mover_line(row, False) for row in losers]])
+        else: lines.append("Losers unavailable right now.")
         keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Market Overview", callback_data="marketv2:refresh")]])
-        try:
-            await callback.message.edit_text("\n".join(lines), reply_markup=keyboard)
-        except Exception:
-            pass
-        await callback.answer()
-        return
+        try: await callback.message.edit_text("\n".join(lines), reply_markup=keyboard)
+        except Exception: pass
+        await callback.answer(); return
     if kind == "chart" and len(action) == 3:
-        await _market_chart(callback, action[2])
-        await callback.answer()
-        return
+        await _market_chart(callback, action[2]); await callback.answer(); return
     await callback.answer()
 
-
 def install(bot_module) -> None:
-    """Install the requested /price card UI and preserve the existing /market dashboard."""
-    if getattr(bot_module.router, "_market_dashboard_installed", False):
-        return
-
+    if getattr(bot_module.router, "_market_dashboard_installed", False): return
     for handler in bot_module.router.message.handlers:
         name = getattr(handler.callback, "__name__", "")
-        if name == "market_cmd":
-            handler.callback = market_cmd
-        elif name == "price":
-            handler.callback = price_cmd
-
-    bot_module.router.callback_query.register(_price_callback, F.data.startswith("priceui:"))
-    bot_module.router.callback_query.register(_market_callback, F.data.startswith("marketv2:"))
-    bot_module.router._market_dashboard_installed = True
+        if name == "market_cmd": handler.callback = market_cmd
+        elif name == "price": handler.callback = price_cmd
+    bot_module.router.callback_query.register(_price_callback, F.data.startswith("priceui:")); bot_module.router.callback_query.register(_market_callback, F.data.startswith("marketv2:")); bot_module.router._market_dashboard_installed = True
