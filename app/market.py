@@ -504,7 +504,7 @@ class BiQuoteProvider(MarketProvider):
         # the latest 120 without resampling. The period argument is intentionally
         # ignored because BiQuote's OHLC endpoint is limit-based.
         params = {"interval": "4h", "limit": "120"}
-        url = f"{self.base_url}/{quote(provider_symbol, safe='')}\/ohlc"
+        url = f"{self.base_url}/{quote(provider_symbol, safe='')}/ohlc"
         async with httpx.AsyncClient(timeout=15) as client:
             response = await client.get(url, params=params)
             response.raise_for_status()
