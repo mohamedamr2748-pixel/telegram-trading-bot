@@ -30,18 +30,17 @@ def _display_ticks(index: pd.DatetimeIndex, timeframe: str) -> tuple[pd.Datetime
     observed = observed.drop_duplicates().sort_values()
     count, unit = legacy._timeframe_interval(timeframe)
     if count == 4 and unit == "h":
-        aligned = observed[(observed.minute == 0) & (observed.second == 0) & (observed.microsecond == 0) & ((observed.hour % 4) == 0)]
-        if len(aligned):
-            observed = aligned
-        if len(observed) <= 1:
-            ticks = pd.DatetimeIndex(observed)
-        else:
-            target_ticks = 7
-            step = max(1, (len(observed) - 1 + target_ticks - 1) // target_ticks)
-            ticks = pd.DatetimeIndex(observed[::step])
-            if ticks[-1] != observed[-1]:
-                ticks = ticks.append(pd.DatetimeIndex([observed[-1]]))
-        return ticks, [timestamp.strftime("%H:%M") for timestamp in ticks]
+        start_boundary = observed[0].floor("4h")
+        end_boundary = observed[-1].floor("4h")
+        grid = pd.date_range(start=start_boundary, end=end_boundary, freq="4h", tz=UTC)
+        ticks = grid[(grid >= observed[0]) & (grid <= observed[-1])]
+        if len(ticks) == 0:
+            ticks = pd.DatetimeIndex([observed[0]])
+        elif len(ticks) > 7:
+            positions = [round(i * (len(ticks) - 1) / 6) for i in range(7)]
+            ticks = pd.DatetimeIndex([ticks[position] for position in positions])
+        return pd.DatetimeIndex(ticks), [timestamp.strftime("%H:%M") for timestamp in ticks]
+
     step = legacy._timestamp_tick_step(timeframe, observed[-1] - observed[0])
     ticks = [observed[0]]
     next_target = observed[0] + step
@@ -62,7 +61,6 @@ def _display_ticks(index: pd.DatetimeIndex, timeframe: str) -> tuple[pd.Datetime
     else:
         date_format = "%b %Y" if span >= pd.Timedelta(days=365) else "%d %b"
     return ticks, [timestamp.strftime(date_format) for timestamp in ticks]
-
 def _candle_width_days(index: pd.DatetimeIndex, timeframe: str) -> float:
     count, unit = legacy._timeframe_interval(timeframe)
     base_days = count * {
@@ -295,25 +293,19 @@ async def render_google_finance_chart(
     ax.text(0.0, 1.19, symbol.upper(), transform=ax.transAxes, ha="left", va="bottom", fontsize=20, fontweight="bold", color="#f8fafc")
     ax.text(0.0, 1.065, price_line, transform=ax.transAxes, ha="left", va="bottom", fontsize=18, fontweight="bold", color=session_colour if period_perf is not None else "#f8fafc")
 
-    ax.text(0.985, 1.18, f"{timeframe.upper()}/Chart • UTC • {work.index[-1].tz_convert(UTC).strftime("%Y-%b-%d")}", transform=ax.transAxes, ha="right", va="center", fontsize=9.5, fontweight="bold", color="#cfd4dc")
-
+    display_timeframe = timeframe.split("/", 1)[0].strip().upper()
     chart_date = work.index[-1].tz_convert(UTC).strftime("%Y-%b-%d")
+    ax.text(0.985, 1.18, f"{display_timeframe}/Chart • UTC • {chart_date}", transform=ax.transAxes, ha="right", va="center", fontsize=9.5, fontweight="bold", color="#cfd4dc")
+
     fig.add_artist(plt.Line2D([0.035, 0.93], [0.262, 0.262], transform=fig.transFigure, color="#34373b", linewidth=0.9))
 
-    last_candle = work.iloc[-1]
-    ohlc = [("Open", float(last_candle["Open"])), ("High", float(last_candle["High"])), ("Low", float(last_candle["Low"])), ("Close", float(last_candle["Close"]))]
-    ohlc_x = [0.055, 0.255, 0.455, 0.655]
-    for xpos, (label, value) in zip(ohlc_x, ohlc):
-        fig.text(xpos, 0.232, label, ha="left", va="center", fontsize=8.8, color="#8f96a3")
-        fig.text(xpos + 0.058, 0.232, legacy._fmt_value(value, digits), ha="left", va="center", fontsize=10.0, fontweight="bold", color="#f8fafc")
-
     rows = legacy._asset_stats_rows(symbol, quote, stats, period_perf)
-    y_positions = [0.190, 0.150, 0.110]
+    y_positions = [0.225, 0.182, 0.139]
     x_positions_text = [0.055, 0.36, 0.66]
     for ypos, row in zip(y_positions, rows):
         for xpos, (label, value) in zip(x_positions_text, row):
-            fig.text(xpos, ypos, label, ha="left", va="center", fontsize=8.7, color="#8f96a3")
-            fig.text(xpos + 0.10, ypos, value, ha="left", va="center", fontsize=9.7, fontweight="bold", color="#f8fafc")
+            fig.text(xpos, ypos, label, ha="left", va="center", fontsize=9.0, color="#9aa0a6")
+            fig.text(xpos + 0.10, ypos, value, ha="left", va="center", fontsize=10.0, fontweight="bold", color="#f8fafc")
 
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=legacy._STANDARD_DPI, bbox_inches="tight", pad_inches=0.08, facecolor=fig.get_facecolor(), edgecolor="none", pil_kwargs={"compress_level": 1})
