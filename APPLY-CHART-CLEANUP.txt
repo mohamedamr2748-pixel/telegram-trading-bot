@@ -1,6 +1,0 @@
-Approved by the project owner.
-
-Remove only the recently-added duplicate OHLC footer; restore the prior footer metadata unchanged.
-Fix only the 4H timestamp labels so they are chronological 4-hour UTC boundaries, without changing candle data or chart geometry.
-Change header from 4H/CHART/Chart • UTC • 2026-Sep-17 to 4H/Chart • UTC • 2026-Sep-17 by normalising the timeframe prefix.
-Preserve native 4H routing, symbol aliases, advanced charts, volume, current-price guide, and all other existing behaviour.
