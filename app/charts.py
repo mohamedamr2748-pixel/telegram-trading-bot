@@ -438,7 +438,11 @@ def _timestamp_tick_labels(ticks: pd.DatetimeIndex, timeframe: str) -> list[str]
     count, unit = _timeframe_interval(timeframe)
     span = ticks[-1] - ticks[0]
     if unit in {"m", "h"}:
-        date_format = "%d %b\n%H:%M" if span >= pd.Timedelta(days=2) else "%H:%M"
+        # 4H charts intentionally show time only, never calendar dates.
+        if count == 4 and unit == "h":
+            date_format = "%H:%M"
+        else:
+            date_format = "%d %b\n%H:%M" if span >= pd.Timedelta(days=2) else "%H:%M"
     elif unit == "mo":
         date_format = "%b %Y"
     else:
