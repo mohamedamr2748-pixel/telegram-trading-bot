@@ -8,7 +8,7 @@ import pandas as pd
 from aiogram import F
 from aiogram.types import BufferedInputFile, CallbackQuery, CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, Message
 
-from app.chart_display_symbols import chart_display_symbol
+from app.chart_display_symbols import chart_display_symbol, normalise_market_symbol
 from app.charts import render_chart
 from app.market import MarketService
 from app.movers import Mover, get_top_movers
@@ -177,6 +177,7 @@ def _price_keyboard(symbol: str, timeframe: str, copy_price: str) -> InlineKeybo
 
 async def _send_price_card(target: Message | CallbackQuery, symbol: str, timeframe: str, *, edit: bool = False) -> bool:
     from app.bot import limit_for_user, ticker_format_image
+    symbol = normalise_market_symbol(symbol)
     user = target.from_user
     if not await limit_for_user(user.id, user.username, "price"):
         message = target.message if isinstance(target, CallbackQuery) else target; await message.answer("⚠️ Free plan limit reached: <b>50/day</b> for price."); return False
