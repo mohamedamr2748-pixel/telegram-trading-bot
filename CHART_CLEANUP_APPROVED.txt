@@ -1,1 +1,0 @@
-Approved one-time cleanup trigger for the standard /price chart.
