@@ -1,0 +1,328 @@
+from __future__ import annotations
+
+import io
+from typing import Any
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.dates as mdates
+import matplotlib.pyplot as plt
+import pandas as pd
+from matplotlib.patches import FancyBboxPatch, Rectangle
+from matplotlib.ticker import FixedFormatter, FixedLocator
+
+from app import _legacy_charts as legacy
+from app.chart_sessions import TradingFrame, UTC, build_frame
+from app.domain import MarketQuote
+
+_CANDLE_UP = "#55e982"
+_CANDLE_DOWN = "#f26b63"
+_NEUTRAL = "#9aa0a6"
+_GRID = "#34373b"
+_BG = "#202124"
+
+
+def _display_ticks(index: pd.DatetimeIndex, timeframe: str) -> tuple[pd.DatetimeIndex, list[str]]:
+    observed = legacy._display_index(index, "")
+    if not len(observed):
+        return observed, []
+    observed = observed.drop_duplicates().sort_values()
+    count, unit = legacy._timeframe_interval(timeframe)
+    if count == 4 and unit == "h":
+        aligned = observed[
+            (observed.minute == 0)
+            & (observed.second == 0)
+            & (observed.microsecond == 0)
+            & ((observed.hour % 4) == 0)
+        ]
+        if len(aligned):
+            observed = aligned
+
+    step = legacy._timestamp_tick_step(timeframe, observed[-1] - observed[0])
+    ticks = [observed[0]]
+    next_target = observed[0] + step
+    for timestamp in observed[1:]:
+        if timestamp >= next_target:
+            ticks.append(timestamp)
+            next_target = timestamp + step
+    if ticks[-1] != observed[-1]:
+        ticks.append(observed[-1])
+    ticks = pd.DatetimeIndex(ticks)
+
+    if len(ticks) <= 1:
+        labels = [ticks[0].strftime("%H:%M")] if len(ticks) else []
+        return ticks, labels
+
+    span = ticks[-1] - ticks[0]
+    if unit in {"m", "h"}:
+        if count == 4 and unit == "h":
+            date_format = "%H:%M"
+        else:
+            date_format = "%d %b\n%H:%M" if span >= pd.Timedelta(days=2) else "%H:%M"
+    elif unit == "mo":
+        date_format = "%b %Y"
+    else:
+        date_format = "%b %Y" if span >= pd.Timedelta(days=365) else "%d %b"
+    return ticks, [timestamp.strftime(date_format) for timestamp in ticks]
+
+
+def _candle_width_days(index: pd.DatetimeIndex, timeframe: str) -> float:
+    count, unit = legacy._timeframe_interval(timeframe)
+    base_days = count * {
+        "m": 1.0 / (24.0 * 60.0),
+        "h": 1.0 / 24.0,
+        "d": 1.0,
+        "w": 7.0,
+        "wk": 7.0,
+        "mo": 30.0,
+    }[unit]
+    if len(index) > 1:
+        values = pd.DatetimeIndex(index).asi8
+        gaps = (values[1:] - values[:-1]) / 86_400_000_000_000
+        positive = gaps[gaps > 0]
+        if len(positive):
+            base_days = min(base_days, float(pd.Series(positive).median()))
+    return max(base_days * 0.72, 1.0 / (24.0 * 60.0) * 0.55)
+
+
+def _plot_candles(ax, work: pd.DataFrame, timeframe: str) -> None:
+    ohlc = work[["Open", "High", "Low", "Close"]].apply(pd.to_numeric, errors="coerce").dropna()
+    if ohlc.empty:
+        return
+    width = _candle_width_days(ohlc.index, timeframe)
+    x_values = mdates.date2num(ohlc.index.to_pydatetime())
+    for x_value, row in zip(x_values, ohlc.itertuples(index=False)):
+        opening, high, low, close = map(float, row)
+        candle_colour = _CANDLE_UP if close >= opening else _CANDLE_DOWN
+        ax.vlines(x_value, low, high, color=candle_colour, linewidth=1.1, alpha=0.95, zorder=4)
+        body_bottom = min(opening, close)
+        body_height = abs(close - opening)
+        if body_height <= 0:
+            ax.hlines(close, x_value - width * 0.38, x_value + width * 0.38, color=candle_colour, linewidth=2.0, zorder=5)
+            continue
+        ax.add_patch(
+            Rectangle(
+                (x_value - width / 2.0, body_bottom),
+                width,
+                body_height,
+                facecolor=candle_colour,
+                edgecolor=candle_colour,
+                linewidth=0.65,
+                zorder=5,
+            )
+        )
+
+
+def _configure_x_axis(ax, index: pd.DatetimeIndex, timeframe: str, visible_bounds: tuple[pd.Timestamp, pd.Timestamp] | None = None) -> None:
+    observed = legacy._display_index(index, "")
+    if visible_bounds is not None:
+        lower, upper = visible_bounds
+        observed = observed[(observed >= lower) & (observed <= upper)]
+    ticks, labels = _display_ticks(observed, timeframe)
+    if not len(ticks):
+        return
+    positions = mdates.date2num(ticks.to_pydatetime())
+    ax.xaxis.set_major_locator(FixedLocator(positions))
+    ax.xaxis.set_major_formatter(FixedFormatter(labels))
+    ax.xaxis.get_offset_text().set_visible(False)
+
+
+async def render_google_finance_chart(
+    df: pd.DataFrame,
+    symbol: str,
+    timeframe: str,
+    prev_close: float | None = None,
+    price: float | None = None,
+    currency: str | None = None,
+    change_percent: float | None = None,
+    quote: MarketQuote | None = None,
+) -> io.BytesIO:
+    required = {"Open", "High", "Low", "Close"}
+    if not required.issubset(df.columns):
+        return await legacy.render_google_finance_chart(
+            df,
+            symbol,
+            timeframe,
+            prev_close=prev_close,
+            price=price,
+            currency=currency,
+            change_percent=change_percent,
+            quote=quote,
+        )
+
+    work = df.copy()
+    work.index = pd.to_datetime(work.index, utc=True, errors="coerce")
+    work = work[work.index.notna()].sort_index()
+    work = work[~work.index.duplicated(keep="last")]
+    work[["Open", "High", "Low", "Close"]] = work[["Open", "High", "Low", "Close"]].apply(pd.to_numeric, errors="coerce")
+    work = work.dropna(subset=["Open", "High", "Low", "Close"])
+    if "Volume" in work.columns:
+        work["Volume"] = pd.to_numeric(work["Volume"], errors="coerce").fillna(0)
+    if work.empty:
+        raise ValueError("No valid OHLC data available for chart")
+    if len(work) > 2500:
+        work = work.iloc[-2500:]
+
+    if quote is None and (prev_close is None or price is None or change_percent is None):
+        try:
+            from app.market import MarketService
+            quote = await MarketService().get_quote(symbol)
+        except Exception:
+            quote = None
+
+    if quote is not None:
+        price = quote.price if price is None else price
+        currency = currency or ("USD" if quote.asset_class in {"stock", "index", "commodity", "metal", "forex", "market"} else None)
+        if prev_close is None and quote.previous_close is not None:
+            prev_close = quote.previous_close
+        if prev_close and prev_close > 0 and price is not None:
+            change_percent = (price / prev_close - 1.0) * 100.0
+        elif change_percent is None:
+            change_percent = quote.change_percent
+
+    is_1d = timeframe.upper().startswith("1D")
+    frame: TradingFrame | None = build_frame(
+        symbol,
+        work.index[-1],
+        quote.asset_class if quote else None,
+        observed_index=work.index,
+    ) if is_1d else None
+    trading_date_iso = frame.trading_date.isoformat() if frame and frame.trading_date else None
+
+    if quote is not None and quote.source == "yfinance" and is_1d:
+        corrected_previous = await legacy._correct_yfinance_previous_close(symbol, quote, timeframe, trading_date_iso)
+        if corrected_previous is not None:
+            prev_close = corrected_previous
+            if price is not None and prev_close > 0:
+                change_percent = (price / prev_close - 1.0) * 100.0
+
+    last_price = float(price) if price is not None else float(work["Close"].iloc[-1])
+    previous = float(prev_close) if prev_close and prev_close > 0 else None
+    first_close = float(work["Close"].iloc[0])
+    if is_1d:
+        if change_percent is None and previous:
+            change_percent = (last_price / previous - 1.0) * 100.0
+        elif change_percent is None and first_close > 0 and len(work) >= 2:
+            change_percent = (last_price / first_close - 1.0) * 100.0
+    else:
+        if first_close > 0:
+            change_percent = (last_price / first_close - 1.0) * 100.0
+        previous = first_close
+
+    period_perf = legacy._period_performance(work["Close"], timeframe, change_percent)
+    regular_perf = legacy._regular_session_performance(work.index, work["Close"], frame) if frame is not None else None
+    colour_perf = regular_perf if frame is not None else period_perf
+    session_colour = legacy._REGULAR_GREEN if colour_perf is not None and colour_perf > 1e-12 else legacy._REGULAR_RED if colour_perf is not None and colour_perf < -1e-12 else _NEUTRAL
+    stats = legacy._regular_session_stats(work, frame, symbol) if frame is not None else legacy._session_stats(work, symbol)
+    digits = legacy._price_digits(symbol, quote)
+    currency_text = f" {currency}" if currency else ""
+
+    fig = plt.figure(figsize=legacy._STANDARD_FIGSIZE, dpi=legacy._STANDARD_DPI, facecolor=_BG)
+    ax = fig.add_axes([0.035, 0.30, 0.865, 0.56])
+    ax.set_facecolor(_BG)
+
+    low_series = work["Low"].to_numpy(dtype=float)
+    high_series = work["High"].to_numpy(dtype=float)
+    baseline = float(min(low_series.min(), previous if previous is not None else low_series.min()))
+    ceiling = float(max(high_series.max(), previous if previous is not None else high_series.max()))
+    spread = ceiling - baseline
+    padding = max(spread * 0.22, abs(last_price) * 0.0025, 0.01)
+    chart_bottom, chart_top = baseline - padding, ceiling + padding
+
+    if frame is not None:
+        legacy._draw_session_bands(ax, frame, session_colour)
+    _plot_candles(ax, work, timeframe)
+
+    if previous is not None:
+        ax.axhline(previous, linewidth=1.0, linestyle=(0, (5, 6)), color="#e4e7eb", alpha=0.85, zorder=2)
+        ax.text(1.002, previous, f"Prev close\n{legacy._fmt_value(previous, digits)}", transform=ax.get_yaxis_transform(), ha="left", va="center", fontsize=8.5, color="#d5d8de", linespacing=1.08)
+
+    ax.set_ylim(chart_bottom, chart_top)
+    ax.grid(axis="y", color=_GRID, linestyle="-", linewidth=0.65, alpha=0.75)
+    ax.grid(axis="x", color=_GRID, linestyle="--", linewidth=0.55, alpha=0.55)
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    ax.tick_params(colors="#d7dbe2", labelsize=8.5, length=0, pad=8)
+    ax.yaxis.tick_right()
+
+    if frame is not None:
+        ax.set_xlim(mdates.date2num(frame.x_min_utc.to_pydatetime()), mdates.date2num(frame.x_max_utc.to_pydatetime()))
+        _configure_x_axis(ax, work.index, timeframe, visible_bounds=(frame.x_min_utc, frame.x_max_utc))
+    else:
+        x = work.index.to_pydatetime()
+        if len(x) > 1:
+            ax.set_xlim(x[0], x[-1])
+        _configure_x_axis(ax, work.index, timeframe)
+
+    price_line = f"{legacy._fmt_value(last_price, digits)}{currency_text}"
+    if period_perf is not None:
+        price_line += f"  {period_perf:+.2f}%"
+    ax.text(0.0, 1.19, symbol.upper(), transform=ax.transAxes, ha="left", va="bottom", fontsize=20, fontweight="bold", color="#f8fafc")
+    ax.text(0.0, 1.065, price_line, transform=ax.transAxes, ha="left", va="bottom", fontsize=18, fontweight="bold", color=session_colour if period_perf is not None else "#f8fafc")
+
+    selector = ["1D", "5D", "1M", "6M", "YTD", "1Y", "5Y"]
+    selected = legacy._selector_key(timeframe)
+    start_x, step = 0.67, 0.047
+    for idx, item in enumerate(selector):
+        xpos = start_x + idx * step
+        if item == selected:
+            pill = FancyBboxPatch((xpos - 0.020, 1.145), 0.040, 0.085, boxstyle="round,pad=0.008,rounding_size=0.018", transform=ax.transAxes, linewidth=0, facecolor="#30343a", edgecolor="none", zorder=8)
+            ax.add_patch(pill)
+            ax.text(xpos, 1.19, item, transform=ax.transAxes, ha="center", va="center", fontsize=10.5, fontweight="bold", color="#f8fafc", zorder=9)
+        else:
+            ax.text(xpos, 1.19, item, transform=ax.transAxes, ha="center", va="center", fontsize=10.5, color="#c7ccd4", zorder=8)
+
+    chart_date = work.index[-1].tz_convert(UTC).strftime("%Y-%b-%d")
+    ax.text(1.0, -0.105, chart_date, transform=ax.transAxes, ha="right", va="top", fontsize=8.5, color="#b9bec7")
+    ax.text(1.0, -0.145, f"{timeframe.upper()} • UTC", transform=ax.transAxes, ha="right", va="top", color="#b8bdc7", fontsize=8.0, fontweight="bold")
+    fig.add_artist(plt.Line2D([0.035, 0.93], [0.262, 0.262], transform=fig.transFigure, color="#34373b", linewidth=0.9))
+
+    rows = legacy._asset_stats_rows(symbol, quote, stats, period_perf)
+    y_positions = [0.225, 0.182, 0.139]
+    x_positions_text = [0.055, 0.36, 0.66]
+    for ypos, row in zip(y_positions, rows):
+        for xpos, (label, value) in zip(x_positions_text, row):
+            fig.text(xpos, ypos, label, ha="left", va="center", fontsize=9.0, color="#9aa0a6")
+            fig.text(xpos + 0.10, ypos, value, ha="left", va="center", fontsize=10.0, fontweight="bold", color="#f8fafc")
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=legacy._STANDARD_DPI, bbox_inches="tight", pad_inches=0.08, facecolor=fig.get_facecolor(), edgecolor="none", pil_kwargs={"compress_level": 1})
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+
+async def render_chart(
+    df: pd.DataFrame,
+    symbol: str,
+    timeframe: str,
+    advanced: bool = False,
+    *,
+    prev_close: float | None = None,
+    price: float | None = None,
+    currency: str | None = None,
+    change_percent: float | None = None,
+    quote: MarketQuote | None = None,
+) -> io.BytesIO:
+    if advanced:
+        return await legacy.render_chart(
+            df,
+            symbol,
+            timeframe,
+            advanced=True,
+            prev_close=prev_close,
+            price=price,
+            currency=currency,
+            change_percent=change_percent,
+            quote=quote,
+        )
+    return await render_google_finance_chart(
+        df,
+        symbol,
+        timeframe,
+        prev_close=prev_close,
+        price=price,
+        currency=currency,
+        change_percent=change_percent,
+        quote=quote,
+    )
