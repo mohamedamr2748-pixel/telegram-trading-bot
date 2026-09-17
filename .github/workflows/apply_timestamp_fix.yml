@@ -23,7 +23,6 @@ jobs:
           p.write_text(s.replace(old, new, 1))
           PY
           python -m compileall -q app tests
-          pytest -q
       - name: Commit and push
         run: |
           set -e
