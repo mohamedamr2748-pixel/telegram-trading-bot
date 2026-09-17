@@ -13,6 +13,11 @@ _SYMBOL_ALIASES = {
     "S&P500": "^GSPC",
     "S&P500INDEX": "^GSPC",
     "NASDAQ100": "^NDX",
+    "NASDAQ": "^IXIC",
+    "NASDAQCOMPOSITE": "^IXIC",
+    "DOW": "^DJI",
+    "DOWJONES": "^DJI",
+    "GOLD": "GC=F",
 }
 
 
