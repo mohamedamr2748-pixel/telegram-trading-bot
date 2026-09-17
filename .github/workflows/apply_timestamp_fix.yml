@@ -1,0 +1,217 @@
+name: Apply chart timestamp fix
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Patch app/charts.py
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('app/charts.py')
+          text = p.read_text()
+
+          if 'from matplotlib.ticker import FixedFormatter, FixedLocator' not in text:
+              text = text.replace('from matplotlib.patches import FancyBboxPatch\n', 'from matplotlib.patches import FancyBboxPatch\nfrom matplotlib.ticker import FixedFormatter, FixedLocator\n', 1)
+
+          old = '    return raw[0].strip().lower() == "1d"\n'
+          new = '    return raw[0].strip().lower() == "1d" and raw[1].strip().lower() != "chart"\n'
+          if old in text and 'raw[1].strip().lower() != "chart"' not in text:
+              text = text.replace(old, new, 1)
+
+          marker = '\n\ndef _timeframe_interval(timeframe: str) -> tuple[int, str]:\n'
+          helpers = r'''
+
+
+def _timeframe_interval(timeframe: str) -> tuple[int, str]:
+    import re
+    match = re.search(r"(\d+)(mo|wk|w|d|h|m)$", timeframe.strip(), re.IGNORECASE)
+    if match is None:
+        return 1, "d"
+    return int(match.group(1)), match.group(2).lower()
+
+
+def _timestamp_tick_step(timeframe: str, span: pd.Timedelta) -> pd.Timedelta:
+    count, unit = _timeframe_interval(timeframe)
+    base_seconds = count * {
+        "m": 60,
+        "h": 60 * 60,
+        "d": 24 * 60 * 60,
+        "w": 7 * 24 * 60 * 60,
+        "wk": 7 * 24 * 60 * 60,
+        "mo": 30 * 24 * 60 * 60,
+    }[unit]
+    multiples = {
+        "m": (1, 2, 3, 5, 10, 15, 30, 60, 120, 240, 360, 720, 1440),
+        "h": (1, 2, 3, 4, 6, 8, 12, 24, 48, 72, 168),
+        "d": (1, 2, 3, 5, 7, 14, 30, 60, 90, 180, 365),
+        "w": (1, 2, 4, 8, 13, 26, 52),
+        "wk": (1, 2, 4, 8, 13, 26, 52),
+        "mo": (1, 2, 3, 6, 12),
+    }[unit]
+    span_seconds = max(span.total_seconds(), 0.0)
+    multiple = next((value for value in multiples if span_seconds / (base_seconds * value) <= 8), multiples[-1])
+    return pd.Timedelta(seconds=base_seconds * multiple)
+
+
+def _observed_timestamp_ticks(index: pd.DatetimeIndex, timeframe: str) -> pd.DatetimeIndex:
+    observed = _display_index(index, "")
+    if not len(observed):
+        return observed
+    observed = observed.drop_duplicates().sort_values()
+    step = _timestamp_tick_step(timeframe, observed[-1] - observed[0])
+    ticks = [observed[0]]
+    next_target = observed[0] + step
+    for timestamp in observed[1:]:
+        if timestamp >= next_target:
+            ticks.append(timestamp)
+            next_target = timestamp + step
+    if ticks[-1] != observed[-1]:
+        ticks.append(observed[-1])
+    return pd.DatetimeIndex(ticks)
+
+
+def _timestamp_tick_labels(ticks: pd.DatetimeIndex, timeframe: str) -> list[str]:
+    if not len(ticks):
+        return []
+    _, unit = _timeframe_interval(timeframe)
+    span = ticks[-1] - ticks[0] if len(ticks) > 1 else pd.Timedelta(0)
+    if unit in {"m", "h"}:
+        fmt = "%d %b\n%H:%M" if span >= pd.Timedelta(days=2) else "%H:%M"
+    elif unit == "mo":
+        fmt = "%b %Y"
+    else:
+        fmt = "%b %Y" if span >= pd.Timedelta(days=365) else "%d %b"
+    return [stamp.strftime(fmt) for stamp in ticks]
+
+
+def _configure_observed_timestamp_ticks(
+    ax,
+    index: pd.DatetimeIndex,
+    timeframe: str,
+    visible_bounds: tuple[pd.Timestamp, pd.Timestamp] | None = None,
+) -> None:
+    observed = _display_index(index, "")
+    if visible_bounds is not None:
+        lower, upper = visible_bounds
+        observed = observed[(observed >= lower) & (observed <= upper)]
+    ticks = _observed_timestamp_ticks(observed, timeframe)
+    if not len(ticks):
+        return
+    positions = mdates.date2num(ticks.to_pydatetime())
+    labels = _timestamp_tick_labels(ticks, timeframe)
+    ax.xaxis.set_major_locator(FixedLocator(positions))
+    ax.xaxis.set_major_formatter(FixedFormatter(labels))
+    ax.xaxis.get_offset_text().set_visible(False)
+'''
+          if marker not in text:
+              insert_at = '\n\nasync def render_google_finance_chart'
+              if insert_at not in text:
+                  raise SystemExit('render anchor not found')
+              text = text.replace(insert_at, helpers + insert_at, 1)
+
+          old_render = '''    if frame is not None:
+        _configure_us_equity_x_axis(ax, frame)
+    else:
+        _configure_price_x_axis(ax, timeframe_key, work.index)
+'''
+          new_render = '''    if frame is not None:
+        _configure_us_equity_x_axis(ax, frame)
+        _configure_observed_timestamp_ticks(
+            ax,
+            work.index,
+            timeframe,
+            visible_bounds=(frame.x_min_utc, frame.x_max_utc),
+        )
+    else:
+        x = work.index.to_pydatetime()
+        if len(x) > 1:
+            ax.set_xlim(x[0], x[-1])
+        _configure_observed_timestamp_ticks(ax, work.index, timeframe)
+'''
+          if old_render not in text:
+              raise SystemExit('render axis anchor not found')
+          text = text.replace(old_render, new_render, 1)
+          p.write_text(text)
+          PY
+
+      - name: Patch tests/test_charts.py
+        shell: bash
+        run: |
+          cat >> tests/test_charts.py <<'PY'
+
+          @pytest.mark.parametrize(
+              ("timeframe", "expected"),
+              [
+                  ("1M/chart", (1, "m")), ("5M/chart", (5, "m")),
+                  ("15M/chart", (15, "m")), ("30M/chart", (30, "m")),
+                  ("1H/chart", (1, "h")), ("4H/chart", (4, "h")),
+                  ("1D/chart", (1, "d")), ("1W/chart", (1, "w")),
+                  ("1MO/chart", (1, "mo")),
+                  ("1mo/5m", (5, "m")), ("1y/4h", (4, "h")),
+              ],
+          )
+          def test_timeframe_interval_parses_production_and_legacy_values(timeframe, expected):
+              assert charts._timeframe_interval(timeframe) == expected
+
+
+          def test_intraday_ticks_use_observed_timestamps_and_include_time():
+              idx = pd.date_range("2026-09-17 12:00", periods=120, freq="5min", tz="UTC")
+              fig, ax = plt.subplots()
+              charts._configure_observed_timestamp_ticks(ax, idx, "5M/chart")
+              ticks = pd.to_datetime(mdates.num2date(ax.xaxis.get_majorticklocs()), utc=True)
+              assert set(ticks).issubset(set(idx))
+              assert any(":" in label.get_text() for label in ax.get_xticklabels())
+              plt.close(fig)
+
+
+          def test_four_hour_ticks_use_four_hour_semantics():
+              idx = pd.date_range("2026-09-01", periods=120, freq="4h", tz="UTC")
+              fig, ax = plt.subplots()
+              charts._configure_observed_timestamp_ticks(ax, idx, "4H/chart")
+              ticks = pd.to_datetime(mdates.num2date(ax.xaxis.get_majorticklocs()), utc=True)
+              assert set(ticks).issubset(set(idx))
+              assert 5 <= len(ticks) <= 9
+              plt.close(fig)
+
+
+          def test_daily_weekly_monthly_labels_have_date_semantics():
+              for timeframe, freq in (("1D/chart", "D"), ("1W/chart", "7D"), ("1MO/chart", "30D")):
+                  idx = pd.date_range("2026-01-01", periods=31, freq=freq, tz="UTC")
+                  fig, ax = plt.subplots()
+                  charts._configure_observed_timestamp_ticks(ax, idx, timeframe)
+                  labels = [label.get_text() for label in ax.get_xticklabels()]
+                  assert labels
+                  assert all(":" not in label for label in labels)
+                  plt.close(fig)
+          PY
+
+      - name: Verify
+        env:
+          PYTHONPATH: .
+          BOT_TOKEN: test-token
+        run: python -m compileall -q app tests && pytest -q
+
+      - name: Commit only requested source/test changes and remove this workflow
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/apply_timestamp_fix.yml
+          git add app/charts.py tests/test_charts.py
+          files="$(git diff --cached --name-only | sort)"
+          expected="$(printf '%s\n' '.github/workflows/apply_timestamp_fix.yml' 'app/charts.py' 'tests/test_charts.py')"
+          test "$files" = "$expected" || { echo "Unexpected staged files:"; printf '%s\n' "$files"; exit 1; }
+          git commit -m 'Fix timeframe-aware chart timestamps'
+          git push origin HEAD:main
