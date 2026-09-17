@@ -4,6 +4,8 @@ import asyncio
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from urllib.parse import quote
+from datetime import time
+from zoneinfo import ZoneInfo
 
 import httpx
 import pandas as pd
@@ -264,6 +266,58 @@ class YFinanceProvider(MarketProvider):
         return inverted
 
     @staticmethod
+    def _resample_stock_4h(frame: pd.DataFrame) -> pd.DataFrame:
+        """Build 4H stock candles from regular-session 1H OHLCV data.
+
+        Yahoo's stock 4H interval can produce inconsistent bars for the
+        session-based chart. We instead use clean 1H regular-session data and
+        aggregate it into 4H buckets anchored at the U.S. regular open.
+        No extended-hours rows are included and no price data is fabricated.
+        """
+        if frame.empty:
+            return frame
+
+        work = frame.copy()
+        work.index = pd.to_datetime(work.index, errors="coerce")
+        work = work[work.index.notna()].sort_index()
+        if work.index.tz is None:
+            work.index = work.index.tz_localize("America/New_York")
+        else:
+            work.index = work.index.tz_convert("America/New_York")
+
+        minutes = work.index.hour * 60 + work.index.minute
+        regular = work[(minutes >= 9 * 60 + 30) & (minutes < 16 * 60)]
+        if regular.empty:
+            return regular
+
+        agg: dict[str, str] = {}
+        for column, function in (
+            ("Open", "first"),
+            ("High", "max"),
+            ("Low", "min"),
+            ("Close", "last"),
+            ("Volume", "sum"),
+        ):
+            if column in regular.columns:
+                agg[column] = function
+        if "Close" not in agg:
+            raise ValueError("No Close column available for 4H stock aggregation")
+
+        four_hour = (
+            regular.resample(
+                "4h",
+                origin="start_day",
+                offset="9h30min",
+                label="left",
+                closed="left",
+            )
+            .agg(agg)
+            .dropna(subset=["Close"])
+        )
+        four_hour.index = four_hour.index.tz_convert("UTC")
+        return four_hour
+
+    @staticmethod
     def _classify(symbol: str) -> str:
         s = symbol.upper().replace("/", "").replace("-", "")
         if s.startswith("^"):
@@ -366,10 +420,15 @@ class YFinanceProvider(MarketProvider):
             _, inverse = self._normalize_pair(symbol)
             yf_symbol = self._history_symbol(symbol)
             ticker = yf.Ticker(yf_symbol)
-            history_kwargs = {"period": period, "interval": interval, "auto_adjust": False}
+            is_stock = self._classify(symbol) == "stock" and not inverse
+            is_stock_4h = interval.strip().lower() == "4h" and is_stock
+            requested_interval = "1h" if is_stock_4h else interval
+            history_kwargs = {"period": period, "interval": requested_interval, "auto_adjust": False}
             # Standard /price intraday charts use regular-session candles only.
             # Quote data continues to expose pre/post-market prices separately.
             df = ticker.history(**history_kwargs)
+            if is_stock_4h:
+                df = self._resample_stock_4h(df)
 
             # Broad-market indices can intermittently return only one intraday
             # row for a direct 1D request. A single row renders as one dot, so
