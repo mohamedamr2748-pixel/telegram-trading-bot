@@ -1,0 +1,49 @@
+name: Finalize native BiQuote 4H chart routing
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/finalize_biquote_4h.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Finalize source
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          market = Path('app/market.py').read_text()
+          market = market.replace('url = f"{self.base_url}/{quote(provider_symbol, safe=\'\')}\\/ohlc"', 'url = f"{self.base_url}/{quote(provider_symbol, safe=\'\')}/ohlc"')
+          Path('app/market.py').write_text(market)
+
+          dashboard_path = Path('app/market_dashboard.py')
+          dashboard = dashboard_path.read_text()
+          old = '    "4H": ("6mo", "1h", "4h"),'
+          new = '    "4H": ("6mo", "4h", None),'
+          if old not in dashboard:
+              raise SystemExit('Expected 4H preset was not found')
+          dashboard = dashboard.replace(old, new, 1)
+          dashboard_path.write_text(dashboard)
+          PY
+
+      - name: Syntax check
+        run: python -m compileall -q app
+
+      - name: Commit and remove one-shot workflow
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/market.py app/market_dashboard.py
+          git rm .github/workflows/finalize_biquote_4h.yml
+          git commit -m 'Route 4H charts through native BiQuote'
+          git push origin HEAD:main
