@@ -258,6 +258,30 @@ def _regular_session_mask(index: pd.DatetimeIndex) -> pd.Series:
     return pd.Series(values, index=index)
 
 
+def _regular_session_performance(
+    index: pd.DatetimeIndex,
+    values,
+    frame: TradingFrame | None,
+) -> float | None:
+    """Return the movement across observed regular-session prices only."""
+    if frame is None or frame.regular_utc is None:
+        return None
+
+    aware = pd.DatetimeIndex(index)
+    if aware.tz is None:
+        aware = aware.tz_localize(UTC)
+    else:
+        aware = aware.tz_convert(UTC)
+
+    start, end = frame.regular_utc
+    regular = pd.Series(values, index=aware)
+    regular = pd.to_numeric(regular, errors="coerce")
+    regular = regular[(aware >= start) & (aware < end)].dropna()
+    if len(regular) < 2 or float(regular.iloc[0]) == 0:
+        return None
+    return (float(regular.iloc[-1]) / float(regular.iloc[0]) - 1.0) * 100.0
+
+
 def _is_full_day_us_intraday(symbol: str, quote: MarketQuote | None, timeframe: str) -> bool:
     return timeframe.upper().startswith("1D") and build_frame(
         symbol, pd.Timestamp.now(tz=UTC), quote.asset_class if quote else None
@@ -413,7 +437,9 @@ async def render_google_finance_chart(
         previous = first_close
 
     period_perf = _period_performance(work["Close"], timeframe, change_percent)
-    line_color = _REGULAR_GREEN if period_perf is not None and period_perf > 1e-12 else _REGULAR_RED if period_perf is not None and period_perf < -1e-12 else _EXTENDED_GREY
+    regular_perf = _regular_session_performance(work.index, work["Close"], frame) if frame is not None else None
+    colour_perf = regular_perf if frame is not None else period_perf
+    line_color = _REGULAR_GREEN if colour_perf is not None and colour_perf > 1e-12 else _REGULAR_RED if colour_perf is not None and colour_perf < -1e-12 else _EXTENDED_GREY
     stats = _regular_session_stats(work, frame, symbol) if frame is not None else _session_stats(work, symbol)
     digits = _price_digits(symbol, quote)
     currency_text = f" {currency}" if currency else ""
