@@ -1,0 +1,73 @@
+name: Apply native BiQuote 4H integration
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/apply_biquote_4h.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Patch provider and 4H routing
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          market_path = Path('app/market.py')
+          text = market_path.read_text()
+
+          old_history = '''    async def get_history(self, symbol: str, period: str = "1mo", interval: str = "1d") -> pd.DataFrame:\n        raise NotImplementedError("Use Google Finance or yfinance for OHLC history")\n'''
+          new_history = '''    @staticmethod\n    def _normalize_history_symbol(symbol: str) -> str:\n        raw = symbol.strip().upper()\n        compact = raw.replace("/", "").replace("-", "")\n        aliases = {\n            "BTCUSD": "BTCUSD",\n            "ETHUSD": "ETHUSD",\n            "SOLUSD": "SOLUSD",\n            "XRPUSD": "XRPUSD",\n            "BNBUSD": "BNBUSD",\n            "BTCUSD": "BTCUSD",\n            "GC=F": "XAUUSD",\n            "XAUUSD": "XAUUSD",\n            "SI=F": "XAGUSD",\n            "XAGUSD": "XAGUSD",\n            "CL=F": "USOIL",\n            "BZ=F": "UKOIL",\n            "^DJI": "US30",\n            "^NDX": "NAS100",\n            "^GSPC": "SPX500",\n            "^GDAXI": "GER40",\n            "^FTSE": "UK100",\n        }\n        return aliases.get(raw, aliases.get(compact, compact))\n\n    @staticmethod\n    def _bars_to_frame(bars: object, symbol: str) -> pd.DataFrame:\n        if not isinstance(bars, list):\n            raise ValueError(f"BiQuote returned no OHLC bars for {symbol}")\n\n        rows: list[dict] = []\n        for bar in bars:\n            if not isinstance(bar, dict):\n                continue\n            raw_time = bar.get("openTime") or bar.get("timestamp") or bar.get("time")\n            if raw_time in (None, ""):\n                continue\n            try:\n                timestamp = pd.to_datetime(raw_time, utc=True)\n                values = {\n                    "Open": to_float(bar.get("open"), None),\n                    "High": to_float(bar.get("high"), None),\n                    "Low": to_float(bar.get("low"), None),\n                    "Close": to_float(bar.get("close"), None),\n                    "Volume": to_float(bar.get("volume"), to_float(bar.get("tickVolume"), 0.0)),\n                }\n            except (TypeError, ValueError):\n                continue\n            if any(values[column] is None for column in ("Open", "High", "Low", "Close")):\n                continue\n            rows.append({"Date": timestamp, **values})\n\n        if not rows:\n            raise ValueError(f"No valid 4H OHLC bars returned for {symbol}")\n\n        frame = pd.DataFrame(rows).set_index("Date").sort_index()\n        frame = frame[~frame.index.duplicated(keep="last")]\n        return frame[["Open", "High", "Low", "Close", "Volume"]]\n\n    async def get_history(self, symbol: str, period: str = "1mo", interval: str = "1d") -> pd.DataFrame:\n        requested_interval = interval.strip().lower()\n        if requested_interval != "4h":\n            raise ValueError("BiQuote history currently supports only native 4H data")\n\n        provider_symbol = self._normalize_history_symbol(symbol)\n        # 120 display candles are needed by /price. BiQuote prepends the current\n        # open candle, so this yields up to 121 rows and lets the dashboard keep\n        # the latest 120 without resampling. The period argument is intentionally\n        # ignored because BiQuote's OHLC endpoint is limit-based.\n        params = {"interval": "4h", "limit": "120"}\n        url = f"{self.base_url}/{quote(provider_symbol, safe='')}\/ohlc"\n        async with httpx.AsyncClient(timeout=15) as client:\n            response = await client.get(url, params=params)\n            response.raise_for_status()\n            payload = response.json()\n\n        if not isinstance(payload, dict):\n            raise ValueError(f"BiQuote returned an invalid response for {symbol}")\n        frame = self._bars_to_frame(payload.get("bars"), provider_symbol)\n        if not frame.index.is_monotonic_increasing:\n            frame = frame.sort_index()\n        return frame\n'''
+
+          if old_history not in text:
+              raise SystemExit('Expected BiQuote get_history block was not found')
+          text = text.replace(old_history, new_history, 1)
+
+          old_service = '''    async def get_history(self, symbol: str, period: str = "1mo", interval: str = "1d") -> pd.DataFrame:\n        if settings.google_finance_enabled:\n            if not self.google.enabled:\n                raise RuntimeError("Google Finance is enabled but GOOGLE_FINANCE_API_KEY is missing")\n            return await self.google.get_history(symbol.strip().upper(), period, interval)\n        return await self.yf.get_history(symbol.strip().upper(), period, interval)\n'''
+          new_service = '''    async def get_history(self, symbol: str, period: str = "1mo", interval: str = "1d") -> pd.DataFrame:\n        normalized_symbol = symbol.strip().upper()\n        normalized_interval = interval.strip().lower()\n\n        # Native 4H is deliberately routed to BiQuote first. We keep yfinance\n        # as a compatibility fallback so an unsupported symbol does not break\n        # /price while BiQuote coverage is being expanded.\n        if normalized_interval == "4h":\n            errors: list[str] = []\n            if settings.biquote_enabled:\n                try:\n                    return await self.bq.get_history(normalized_symbol, period, normalized_interval)\n                except Exception as exc:\n                    errors.append(f"{self.bq.name}: {exc}")\n            if settings.yfinance_enabled:\n                try:\n                    return await self.yf.get_history(normalized_symbol, period, normalized_interval)\n                except Exception as exc:\n                    errors.append(f"{self.yf.name}: {exc}")\n            raise RuntimeError("4H history providers failed: " + " | ".join(errors))\n\n        if settings.google_finance_enabled:\n            if not self.google.enabled:\n                raise RuntimeError("Google Finance is enabled but GOOGLE_FINANCE_API_KEY is missing")\n            return await self.google.get_history(normalized_symbol, period, interval)\n        return await self.yf.get_history(normalized_symbol, period, interval)\n'''
+
+          if old_service not in text:
+              raise SystemExit('Expected MarketService.get_history block was not found')
+          text = text.replace(old_service, new_service, 1)
+          market_path.write_text(text)
+
+          dashboard_path = Path('app/market_dashboard.py')
+          dashboard = dashboard_path.read_text()
+          old_tf = '    "4H": ("6mo", "1h", "4h"),'
+          new_tf = '    "4H": ("6mo", "4h", None),' 
+          if old_tf not in dashboard:
+              raise SystemExit('Expected 4H timeframe preset was not found')
+          dashboard = dashboard.replace(old_tf, new_tf, 1)
+          dashboard_path.write_text(dashboard)
+          PY
+
+      - name: Validate changes
+        run: |
+          python -m compileall -q app
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+          for path in (Path('app/market.py'), Path('app/market_dashboard.py')):
+              ast.parse(path.read_text())
+              print(f'OK: {path}')
+          PY
+
+      - name: Commit and remove one-shot workflow
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/market.py app/market_dashboard.py
+          git rm .github/workflows/apply_biquote_4h.yml
+          git commit -m 'Use native BiQuote 4H history'
+          git push origin HEAD:main
