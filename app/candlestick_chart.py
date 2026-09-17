@@ -192,7 +192,11 @@ async def render_google_finance_chart(
         elif change_percent is None:
             change_percent = quote.change_percent
 
-    is_1d = timeframe.upper().startswith("1D")
+    # Treat 1D as the daily candle interval used by /price. Only a true
+    # intraday 1-day chart such as 1d/15m should use the US-session frame.
+    interval_count, interval_unit = legacy._timeframe_interval(timeframe)
+    is_1d = timeframe.upper().startswith("1D") and interval_unit in {"m", "h"}
+    is_daily_candles = interval_count == 1 and interval_unit == "d"
     frame: TradingFrame | None = build_frame(
         symbol,
         work.index[-1],
@@ -219,7 +223,14 @@ async def render_google_finance_chart(
     else:
         if first_close > 0:
             change_percent = (last_price / first_close - 1.0) * 100.0
-        previous = first_close
+        # Keep the existing chart baseline for intraday/historical views. For
+        # the daily candle button, retain the quote's real previous close when
+        # available instead of relabelling the first historical candle as
+        # "Prev close". This changes no candle data.
+        if is_daily_candles and prev_close is not None and prev_close > 0:
+            previous = float(prev_close)
+        else:
+            previous = first_close
 
     period_perf = legacy._period_performance(work["Close"], timeframe, change_percent)
     regular_perf = legacy._regular_session_performance(work.index, work["Close"], frame) if frame is not None else None
