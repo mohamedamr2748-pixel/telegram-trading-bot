@@ -1,0 +1,39 @@
+name: Scope intraday tick selection
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/scope_intraday_tick_selection.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  scope:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Scope tick selection
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('app/candlestick_chart.py')
+          text = path.read_text(encoding='utf-8')
+          old = '    if unit in {"m", "h"}:\n'
+          new = '    if (unit == "m" and count in {15, 30}) or (unit == "h" and count in {1, 4}):\n'
+          if old not in text:
+              raise SystemExit('Expected intraday tick condition not found')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+          python -m py_compile app/candlestick_chart.py
+      - name: Commit and remove temporary workflow
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          rm -f .github/workflows/scope_intraday_tick_selection.yml
+          git add app/candlestick_chart.py .github/workflows/scope_intraday_tick_selection.yml
+          git commit -m 'Keep existing 1m and 5m tick behaviour'
+          git push origin main
