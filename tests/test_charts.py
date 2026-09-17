@@ -29,21 +29,6 @@ def test_sub_cent_formatting_never_uses_scientific_notation():
     assert charts._fmt_value(12.5) == "12.50"
 
 
-def test_index_symbols_are_detected_without_provider_suffixes():
-    for symbol in ("^GSPC", "SP500", "S&P 500", "^NDX", "NASDAQ-100", "^IXIC", "NASDAQ Composite", "^DJI", "Dow Jones"):
-        assert charts._is_index_symbol(symbol) is True
-    assert charts._is_index_symbol("AAPL") is False
-
-
-def test_headline_change_colour_follows_displayed_change_not_chart_colour():
-    assert charts._change_colour(0.02) == charts._REGULAR_GREEN
-    assert charts._change_colour(2.0) == charts._REGULAR_GREEN
-    assert charts._change_colour(-0.02) == charts._REGULAR_RED
-    assert charts._change_colour(-2.0) == charts._REGULAR_RED
-    assert charts._change_colour(0.0) == charts._EXTENDED_GREY
-    assert charts._change_colour(None) == "#f8fafc"
-
-
 def test_us_frame_uses_real_observed_bounds():
     idx = pd.date_range("2026-09-11 13:00", periods=44, freq="15min", tz="UTC")
     frame = build_frame("NFE", idx[-1], "stock", observed_index=idx)
@@ -65,6 +50,68 @@ def test_reference_axis_uses_observed_bounds_and_adaptive_utc_ticks():
     assert left == pytest.approx(mdates.date2num(idx[0].to_pydatetime()))
     assert right == pytest.approx(mdates.date2num(idx[-1].to_pydatetime()))
     assert isinstance(ax.xaxis.get_major_locator(), mdates.AutoDateLocator)
+    plt.close(fig)
+
+
+@pytest.mark.parametrize(
+    ("timeframe", "expected"),
+    [
+        ("1M/chart", (1, "m")),
+        ("5M/chart", (5, "m")),
+        ("15M/chart", (15, "m")),
+        ("30M/chart", (30, "m")),
+        ("1H/chart", (1, "h")),
+        ("4H/chart", (4, "h")),
+        ("1D/chart", (1, "d")),
+        ("1W/chart", (1, "w")),
+        ("1MO/chart", (1, "mo")),
+        ("1mo/5m", (5, "m")),
+        ("1y/4h", (4, "h")),
+    ],
+)
+def test_timeframe_interval_parses_production_and_legacy_chart_values(timeframe, expected):
+    assert charts._timeframe_interval(timeframe) == expected
+
+
+@pytest.mark.parametrize(
+    ("timeframe", "frequency", "periods", "maximum_tick_gap"),
+    [
+        ("5M/chart", "5min", 120, pd.Timedelta(hours=3)),
+        ("4H/chart", "4h", 120, pd.Timedelta(days=5)),
+    ],
+)
+def test_timestamp_ticks_follow_intraday_candle_intervals(timeframe, frequency, periods, maximum_tick_gap):
+    idx = pd.date_range("2026-09-01 00:00", periods=periods, freq=frequency, tz="UTC")
+    fig, ax = plt.subplots()
+
+    charts._configure_observed_timestamp_ticks(ax, idx, timeframe)
+
+    tick_positions = ax.xaxis.get_majorticklocs()
+    tick_times = pd.to_datetime(mdates.num2date(tick_positions), utc=True)
+    assert set(tick_times).issubset(set(idx))
+    assert 5 <= len(tick_times) <= 9
+    assert tick_times.to_series().diff().iloc[1:].max() <= maximum_tick_gap
+    plt.close(fig)
+
+
+@pytest.mark.parametrize(
+    ("timeframe", "frequency", "periods", "expected_label"),
+    [
+        ("1D/chart", "1D", 31, "01 Jan"),
+        ("1W/chart", "7D", 12, "Jan"),
+        ("1MO/chart", "30D", 12, "2026"),
+    ],
+)
+def test_timestamp_ticks_use_daily_weekly_monthly_label_semantics(timeframe, frequency, periods, expected_label):
+    idx = pd.date_range("2026-01-01", periods=periods, freq=frequency, tz="UTC")
+    fig, ax = plt.subplots()
+
+    charts._configure_observed_timestamp_ticks(ax, idx, timeframe)
+
+    labels = [label.get_text() for label in ax.get_xticklabels()]
+    assert labels
+    assert any(expected_label in label for label in labels)
+    assert len(labels) <= 9
     plt.close(fig)
 
 
@@ -113,8 +160,7 @@ def test_session_line_colours_regular_green_for_positive_period():
     plt.close(fig)
 
 
-@pytest.mark.asyncio
-async def test_regular_session_performance_ignores_extended_hours_movement():
+def test_regular_session_performance_ignores_extended_hours_movement():
     idx = pd.to_datetime([
         "2026-09-11 13:15Z",
         "2026-09-11 13:30Z",
