@@ -1,1 +1,0 @@
-Approved scope: move timeframe/date label to chart header; remove duplicate footer timeframe/date; preserve all other chart/data behaviour.

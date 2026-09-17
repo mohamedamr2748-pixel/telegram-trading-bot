@@ -295,7 +295,7 @@ async def render_google_finance_chart(
     ax.text(0.0, 1.19, symbol.upper(), transform=ax.transAxes, ha="left", va="bottom", fontsize=20, fontweight="bold", color="#f8fafc")
     ax.text(0.0, 1.065, price_line, transform=ax.transAxes, ha="left", va="bottom", fontsize=18, fontweight="bold", color=session_colour if period_perf is not None else "#f8fafc")
 
-    ax.text(0.985, 1.18, f"{timeframe.upper()} • UTC", transform=ax.transAxes, ha="right", va="center", fontsize=9.5, fontweight="bold", color="#cfd4dc")
+    ax.text(0.985, 1.18, f"{timeframe.upper()}/Chart • UTC • {work.index[-1].tz_convert(UTC).strftime("%Y-%b-%d")}", transform=ax.transAxes, ha="right", va="center", fontsize=9.5, fontweight="bold", color="#cfd4dc")
 
     chart_date = work.index[-1].tz_convert(UTC).strftime("%Y-%b-%d")
     fig.add_artist(plt.Line2D([0.035, 0.93], [0.262, 0.262], transform=fig.transFigure, color="#34373b", linewidth=0.9))
@@ -306,9 +306,6 @@ async def render_google_finance_chart(
     for xpos, (label, value) in zip(ohlc_x, ohlc):
         fig.text(xpos, 0.232, label, ha="left", va="center", fontsize=8.8, color="#8f96a3")
         fig.text(xpos + 0.058, 0.232, legacy._fmt_value(value, digits), ha="left", va="center", fontsize=10.0, fontweight="bold", color="#f8fafc")
-
-    fig.text(0.86, 0.245, chart_date, ha="right", va="center", fontsize=8.3, color="#aab0bb")
-    fig.text(0.86, 0.220, f"{timeframe.upper()} • UTC", ha="right", va="center", fontsize=8.0, fontweight="bold", color="#b8bdc7")
 
     rows = legacy._asset_stats_rows(symbol, quote, stats, period_perf)
     y_positions = [0.190, 0.150, 0.110]
