@@ -248,7 +248,7 @@ async def render_google_finance_chart(
         else:
             previous = first_close
 
-    compact_x = frame is None and interval_unit in {"m", "h"}
+    compact_x = frame is None and ((interval_unit == "m" and interval_count in {15, 30}) or (interval_unit == "h" and interval_count in {1, 4}))
     period_perf = legacy._period_performance(work["Close"], timeframe, change_percent)
     regular_perf = legacy._regular_session_performance(work.index, work["Close"], frame) if frame is not None else None
     colour_perf = regular_perf if frame is not None else period_perf
