@@ -781,8 +781,7 @@ async def _collect_brief_report() -> dict:
         "movers": movers,
         "news": news_snapshot,
     }
-    ai = await generate_market_brief(snapshot)
-    return {**snapshot, **ai}
+    return await generate_market_brief(snapshot)
 
 
 @router.message(Command("brief"))
