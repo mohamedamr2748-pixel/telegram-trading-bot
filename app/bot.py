@@ -152,6 +152,35 @@ async def limit_for_user(user_id: int, username: str | None, key: str) -> bool:
     return ok
 
 
+async def brief_limit_status(user_id: int, username: str | None) -> tuple[bool, int | None]:
+    async with session_factory() as session:
+        user = await get_or_create_user(session, user_id, username)
+        plan = effective_plan(user)
+        limit = _plan_brief_limit(plan)
+        if limit is None:
+            return True, None
+        from datetime import date
+        from app.db import Usage
+        count = await session.scalar(
+            select(Usage.count).where(
+                Usage.user_id == user.id,
+                Usage.day == date.today(),
+                Usage.key == "brief",
+            )
+        ) or 0
+        return count < limit, limit
+
+
+async def consume_brief_success(user_id: int, username: str | None) -> None:
+    async with session_factory() as session:
+        user = await get_or_create_user(session, user_id, username)
+        plan = effective_plan(user)
+        limit = _plan_brief_limit(plan)
+        if limit is None:
+            return
+        await consume_usage(session, user.id, "brief", limit)
+
+
 async def limit_or_message(message: Message, key: str) -> bool:
     ok = await limit_for_user(message.from_user.id, message.from_user.username, key)
     if not ok:
@@ -806,12 +835,15 @@ async def _collect_brief_report() -> dict:
 
 @router.message(Command("brief"))
 async def brief(message: Message) -> None:
-    if not await limit_or_message(message, "brief"):
+    allowed, limit = await brief_limit_status(message.from_user.id, message.from_user.username)
+    if not allowed:
+        await message.answer(f"⚠️ <b>Brief limit reached</b>: {limit}/day on your current plan.")
         return
     status = await message.answer("⏳ <b>Preparing your Daily Market Brief...</b>")
     try:
         report = await _collect_brief_report()
         await _save_latest_brief(message.from_user.id, report)
+        await consume_brief_success(message.from_user.id, message.from_user.username)
         rendered = _render_brief(report)
         # Keep the final Telegram message safely below Telegram's 4096-character limit.
         if len(rendered) > 3900:
