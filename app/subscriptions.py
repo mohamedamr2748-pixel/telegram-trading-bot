@@ -51,10 +51,10 @@ def _parse_payload(payload: str) -> tuple[int, str] | None:
     if not payload.startswith(PAYLOAD_PREFIX):
         return None
     parts = payload.split(":")
-    if len(parts) != 3:
+    if len(parts) != 4:
         return None
     try:
-        return int(parts[2]), parts[2]
+        return int(parts[2]), parts[3]
     except (TypeError, ValueError):
         return None
 
