@@ -626,7 +626,14 @@ BRIEF_LABELS = {
 def _brief_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="📄 Export to PDF", callback_data="brief:pdf")],
+            [
+                InlineKeyboardButton(text="📄 Export PDF", callback_data="brief:pdf"),
+                InlineKeyboardButton(text="📊 Market", callback_data="brief:market"),
+            ],
+            [
+                InlineKeyboardButton(text="📰 News", callback_data="brief:news"),
+                InlineKeyboardButton(text="⭐ Watchlist", callback_data="brief:watchlist"),
+            ],
         ]
     )
 
@@ -696,101 +703,128 @@ def _brief_pct(value: object) -> str:
         return "n/a"
 
 
+def _impact_badge(impact: str) -> str:
+    return {
+        "positive": "🟢",
+        "negative": "🔴",
+        "mixed": "🟡",
+        "neutral": "⚪",
+    }.get(str(impact).lower(), "⚪")
+
+
 def _render_brief(report: dict) -> str:
     quotes = report.get("quotes", [])
     movers = report.get("movers", {})
     news_items = report.get("news", [])
-    drivers = {str(x.get("news_id")): x for x in report.get("news_implications", []) if isinstance(x, dict)}
+    drivers = {
+        str(x.get("news_id")): x
+        for x in report.get("news_implications", [])
+        if isinstance(x, dict)
+    }
+
     lines = [
-        "🌅 <b>DAILY MARKET BRIEF</b>",
+        "🌅 <b>TICKARO • DAILY MARKET BRIEF</b>",
         "━━━━━━━━━━━━━━━━━━━━",
         f"🕒 <code>{escape(_brief_time(report.get('generated_at')))}</code>",
-        f"🤖 <b>{escape(BOT_USERNAME)}</b>",
         "",
-        f"🎯 <b>MARKET PULSE • {escape(str(report.get('market_regime', 'Mixed')))}</b>",
+        f"🎯 <b>MARKET PULSE</b>  •  <b>{escape(str(report.get('market_regime', 'Mixed')))}</b>",
         escape(str(report.get("executive_summary", "")).strip()) or "No executive summary available.",
         "",
-        "📊 <b>CROSS-ASSET SNAPSHOT</b>",
+        "📊 <b>CROSS-ASSET DASHBOARD</b>",
     ]
+
     for quote in quotes[:5]:
         label = escape(str(quote.get("label", quote.get("symbol", ""))))
         price = escape(str(quote.get("price_text", "n/a")))
         move = escape(str(quote.get("move_text", "n/a")))
-        status = str(quote.get("market_status", "unknown")).replace("_", " ").title()
-        stale = " • STALE" if quote.get("stale") else ""
-        lines.append(f"<b>{label}</b>  <code>{price}</code>  {move}  <i>{escape(status + stale)}</i>")
+        stale = "  <i>STALE</i>" if quote.get("stale") else ""
+        lines.append(f"<b>{label:<9}</b> <code>{price}</code>  {move}{stale}")
 
     lines.extend(["", "🧠 <b>AI MARKET READ</b>"])
-    for item in report.get("cross_asset_insights", [])[:4]:
-        lines.append(f"• {escape(str(item))}")
+    insights = report.get("cross_asset_insights", [])
+    if insights:
+        lines.extend(f"• {escape(str(item))}" for item in insights[:4])
+    else:
+        lines.append("• No additional cross-asset insight available.")
 
-    lines.extend(["", "🔥 <b>TOP US EQUITY MOVERS</b>"])
     gainers = movers.get("gainers", [])[:3]
     losers = movers.get("losers", [])[:3]
-    lines.append(
-        "<b>Gainers:</b> " + (
-            " • ".join(f"<code>{escape(str(m.get('symbol')))}</code> {_brief_pct(m.get('percent_change'))}" for m in gainers)
-            if gainers else "n/a"
+    lines.extend(["", "🔥 <b>MARKET MOVERS</b>"])
+    if gainers:
+        lines.append(
+            "<b>↑ Gainers</b>  " +
+            "  •  ".join(
+                f"<code>{escape(str(m.get('symbol')))}</code> <b>{_brief_pct(m.get('percent_change'))}</b>"
+                for m in gainers
+            )
         )
-    )
-    lines.append(
-        "<b>Losers:</b> " + (
-            " • ".join(f"<code>{escape(str(m.get('symbol')))}</code> {_brief_pct(m.get('percent_change'))}" for m in losers)
-            if losers else "n/a"
-        )
-    )
-
-    lines.extend(["", "📰 <b>NEWS SIGNALS</b>"])
-    for item in news_items[:5]:
-        title = escape(str(item.get("title", "Untitled")))
-        source = escape(str(item.get("source", "Unknown")))
-        stamp = _brief_time(item.get("published_at"))
-        lines.append(f"• <b>{title}</b>")
-        lines.append(f"  <i>{source} • {escape(stamp)}</i>")
-        driver = drivers.get(str(item.get("id")))
-        if driver and driver.get("point"):
-            lines.append(f"  ↳ {escape(str(driver['point']))}")
-
-    lines.extend(["", "⚠️ <b>RISK WATCH</b>"])
-    risk = report.get("risk_watch", [])
-    if risk:
-        lines.extend(f"• {escape(str(x))}" for x in risk[:4])
     else:
-        lines.append("• No specific risk item was supported by the supplied snapshot.")
+        lines.append("<b>↑ Gainers</b>  n/a")
+    if losers:
+        lines.append(
+            "<b>↓ Losers</b>   " +
+            "  •  ".join(
+                f"<code>{escape(str(m.get('symbol')))}</code> <b>{_brief_pct(m.get('percent_change'))}</b>"
+                for m in losers
+            )
+        )
+    else:
+        lines.append("<b>↓ Losers</b>   n/a")
+
+    lines.extend(["", "📰 <b>NEWS INTELLIGENCE</b>"])
+    if news_items:
+        for item in news_items[:5]:
+            title = escape(str(item.get("title", "Untitled")))
+            source = escape(str(item.get("source", "Unknown")))
+            stamp = _brief_time(item.get("published_at"))
+            driver = drivers.get(str(item.get("id")))
+            badge = _impact_badge(driver.get("impact")) if driver else "•"
+            lines.append(f"{badge} <b>{title}</b>")
+            lines.append(f"   <i>{source} • {escape(stamp)}</i>")
+            if driver and driver.get("point"):
+                lines.append(f"   ↳ {escape(str(driver['point']))}")
+    else:
+        lines.append("• No recent market headlines available.")
+
+    lines.extend(["", "⚠️ <b>RISK RADAR</b>"])
+    risks = report.get("risk_watch", [])
+    if risks:
+        lines.extend(f"• {escape(str(item))}" for item in risks[:4])
+    else:
+        lines.append("• No specific risk item identified from the supplied data.")
 
     lines.extend(["", "👀 <b>WATCH NEXT</b>"])
-    watch_next = report.get("watch_next", [])
-    if watch_next:
-        lines.extend(f"• {escape(str(x))}" for x in watch_next[:4])
+    next_items = report.get("watch_next", [])
+    if next_items:
+        lines.extend(f"• {escape(str(item))}" for item in next_items[:4])
     else:
         lines.append("• Monitor fresh prices and market-moving headlines.")
 
     lines.extend([
         "",
         "━━━━━━━━━━━━━━━━━━━━",
-        f"ℹ️ <i>{escape(str(report.get('data_quality', 'Based on the latest available snapshot.')))}</i>",
-        f"🤖 <i>{escape(BOT_USERNAME)} • Powered by OpenRouter</i>",
-        "",
-        "⚠️ <i>Market information and AI-generated context for orientation, not personalised investment advice.</i>",
+        "ℹ️ <i>Market information and AI-generated context for orientation only; not personalised investment advice.</i>",
     ])
     return "\n".join(lines)
 
 
-async def _save_latest_brief(user_id: int, report: dict) -> None:
+async def _save_latest_brief(telegram_id: int, report: dict) -> None:
     payload = json.dumps(report, ensure_ascii=False)
     async with session_factory() as session:
-        row = await session.scalar(select(BriefReport).where(BriefReport.user_id == user_id))
+        user = await get_or_create_user(session, telegram_id, None)
+        row = await session.scalar(select(BriefReport).where(BriefReport.user_id == user.id))
         if row is None:
-            session.add(BriefReport(user_id=user_id, report_json=payload))
+            session.add(BriefReport(user_id=user.id, report_json=payload))
         else:
             row.report_json = payload
             row.created_at = datetime.now(timezone.utc)
         await session.commit()
 
 
-async def _get_latest_brief(user_id: int) -> dict | None:
+async def _get_latest_brief(telegram_id: int) -> dict | None:
     async with session_factory() as session:
-        row = await session.scalar(select(BriefReport).where(BriefReport.user_id == user_id))
+        user = await get_or_create_user(session, telegram_id, None)
+        row = await session.scalar(select(BriefReport).where(BriefReport.user_id == user.id))
     if row is None:
         return None
     try:
@@ -904,6 +938,24 @@ async def brief_pdf_command(message: Message) -> None:
         )
     except Exception:
         await message.answer("⚠️ PDF export failed. Please try again later.")
+
+
+@router.callback_query(F.data == "brief:market")
+async def brief_market_callback(callback: CallbackQuery) -> None:
+    await callback.message.answer("📊 <b>Market</b>\nUse <code>/market</code> for the live market dashboard.")
+    await callback.answer()
+
+
+@router.callback_query(F.data == "brief:news")
+async def brief_news_callback(callback: CallbackQuery) -> None:
+    await callback.message.answer("📰 <b>News</b>\nUse <code>/news SYMBOL</code> for asset-specific headlines.")
+    await callback.answer()
+
+
+@router.callback_query(F.data == "brief:watchlist")
+async def brief_watchlist_callback(callback: CallbackQuery) -> None:
+    await callback.message.answer("⭐ <b>Watchlist</b>\nUse <code>/watchlist</code> to open your tracked assets.")
+    await callback.answer()
 
 
 @router.callback_query(F.data == "brief:pdf")
