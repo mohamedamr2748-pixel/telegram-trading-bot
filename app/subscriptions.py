@@ -90,9 +90,9 @@ async def _subscribe_screen(user: User) -> tuple[str, InlineKeyboardMarkup]:
         )
 
     features = [
-        "Higher usage limits",
-        "More watchlist capacity",
-        "More alert capacity",
+        "Up to 10 AI market briefs/day",
+        "Higher usage limits across trading tools",
+        "More watchlist and alert capacity",
         "Premium trading workflows as they are released",
     ]
     body = "<b>⭐ Tickaro Pro</b>\n\n" + "\n".join(f"• {x}" for x in features) + "\n\n"
