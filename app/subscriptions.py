@@ -51,17 +51,19 @@ def _parse_payload(payload: str) -> tuple[int, str] | None:
     if not payload.startswith(PAYLOAD_PREFIX):
         return None
     parts = payload.split(":")
-    if len(parts) != 4:
+    if len(parts) != 3:
         return None
     try:
-        return int(parts[2]), parts[3]
+        return int(parts[2]), parts[2]
     except (TypeError, ValueError):
         return None
 
 
-def subscribe_keyboard(*, can_buy: bool) -> InlineKeyboardMarkup:
+def subscribe_keyboard(*, can_buy: bool, payment_url: str | None = None) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
-    if can_buy:
+    if can_buy and payment_url:
+        rows.append([InlineKeyboardButton(text="⭐ Pay 80 Stars / 30 days", url=payment_url)])
+    elif can_buy:
         rows.append([InlineKeyboardButton(text="⭐ Subscribe to Pro", callback_data="subscribe:pro")])
     rows.append([InlineKeyboardButton(text="👤 Account", callback_data="subscribe:account")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -96,7 +98,8 @@ async def _subscribe_screen(user: User) -> tuple[str, InlineKeyboardMarkup]:
     body = "<b>⭐ Tickaro Pro</b>\n\n" + "\n".join(f"• {x}" for x in features) + "\n\n"
     if settings.pro_price_stars > 0:
         body += f"<b>Price:</b> {settings.pro_price_stars} ⭐ / 30 days\n"
-        body += "Payment is processed securely through Telegram Stars."
+        body += "Payment is processed securely through Telegram Stars.\n"
+        body += "Tap the button below to open Telegram's secure checkout."
         return body, subscribe_keyboard(can_buy=True)
 
     body += "<b>Payment:</b> Not configured yet.\n"
@@ -152,13 +155,32 @@ async def subscribe_callback(callback: CallbackQuery) -> None:
         "payload": payload,
         "currency": "XTR",
         "prices": [LabeledPrice(label="Tickaro Pro — 30 days", amount=price)],
-        "provider_token": "",
         "subscription_period": SUBSCRIPTION_PERIOD_SECONDS,
     }
-    if settings.subscription_terms_url.strip():
-        invoice_data["terms_url"] = settings.subscription_terms_url.strip()
 
-    await callback.message.answer_invoice(**invoice_data)
+    try:
+        invoice_link = await callback.bot.create_invoice_link(**invoice_data)
+    except Exception:
+        await callback.message.answer(
+            "⚠️ Telegram could not create the Pro checkout right now. Please try again in a moment."
+        )
+        await callback.answer()
+        return
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=f"⭐ Pay {price} Stars / 30 days", url=invoice_link)],
+            [InlineKeyboardButton(text="👤 Account", callback_data="subscribe:account")],
+        ]
+    )
+    await callback.message.answer(
+        "<b>⭐ Tickaro Pro Checkout</b>\n\n"
+        f"Price: <b>{price} Telegram Stars</b>\n"
+        "Billing period: <b>30 days</b>\n\n"
+        "Tap the button below to open Telegram's secure checkout.\n"
+        "The subscription renews automatically each month unless cancelled.",
+        reply_markup=keyboard,
+    )
     await callback.answer()
 
 
