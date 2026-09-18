@@ -17,6 +17,11 @@ OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 BOT_USERNAME = "@TickaroBot"
 PRIMARY_MODEL = "google/gemma-4-26b-a4b-it:free"
 FALLBACK_MODEL = "openrouter/free"
+MODEL_CHAIN = [
+    "google/gemma-4-26b-a4b-it:free",
+    "nvidia/nemotron-3-super-120b-a12b:free",
+    "openrouter/free",
+]
 CACHE_TTL_SECONDS = 5 * 60
 
 _shared_cache: tuple[int, dict[str, Any]] | None = None
@@ -140,11 +145,11 @@ async def _request(model: str, prompt: str) -> dict[str, Any]:
             },
             {"role": "user", "content": prompt},
         ],
-        "temperature": 0.15,
-        "max_tokens": 1800,
+        "temperature": 0.1,
+        "max_tokens": 2200,
         "response_format": {"type": "json_object"},
     }
-    async with httpx.AsyncClient(timeout=25) as client:
+    async with httpx.AsyncClient(timeout=30) as client:
         response = await client.post(OPENROUTER_URL, headers=headers, json=body)
         response.raise_for_status()
         data = response.json()
@@ -161,6 +166,20 @@ async def _request(model: str, prompt: str) -> dict[str, Any]:
             f"OpenRouter returned empty content (finish_reason={finish_reason}, refusal={refusal!r})"
         )
     return _normalise_report(_json_from_text(content))
+
+
+async def _request_chain(prompt: str) -> tuple[dict[str, Any], str]:
+    errors: list[str] = []
+    configured = settings.openrouter_model.strip()
+    candidates = [configured] if configured else []
+    candidates.extend(model for model in MODEL_CHAIN if model not in candidates)
+    for model in candidates[:4]:
+        try:
+            return await _request(model, prompt), model
+        except Exception as exc:
+            errors.append(f"{model}: {exc}")
+            logger.warning("OpenRouter model failed: %s", errors[-1])
+    raise RuntimeError("All OpenRouter models failed: " + " | ".join(errors)[-700:])
 
 
 def _fallback_report(snapshot: dict[str, Any], reason: str) -> dict[str, Any]:
@@ -227,17 +246,12 @@ async def generate_market_brief(snapshot: dict[str, Any]) -> dict[str, Any]:
         return _shared_cache[1]
 
     prompt = _prompt(snapshot)
-    selected_model = settings.openrouter_model.strip() or PRIMARY_MODEL
     try:
-        report = await _request(selected_model, prompt)
-    except Exception as primary_exc:
-        logger.warning("Primary OpenRouter brief model failed: %s", primary_exc)
-        selected_model = settings.openrouter_fallback_model.strip() or FALLBACK_MODEL
-        try:
-            report = await _request(selected_model, prompt)
-        except Exception as fallback_exc:
-            logger.exception("OpenRouter fallback failed: %s", fallback_exc)
-            report = _fallback_report(snapshot, str(fallback_exc)[:160])
+        report, selected_model = await _request_chain(prompt)
+    except Exception as exc:
+        logger.exception("OpenRouter model chain failed; using deterministic brief: %s", exc)
+        report = _fallback_report(snapshot, str(exc)[:220])
+        selected_model = "deterministic-fallback"
 
     report["generated_at"] = datetime.now(timezone.utc).isoformat()
     report["model"] = selected_model

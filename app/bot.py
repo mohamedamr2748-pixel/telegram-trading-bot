@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from datetime import datetime, timezone
 from html import escape
 from io import BytesIO
@@ -27,6 +28,7 @@ from app.subscriptions import effective_plan, install as install_subscriptions, 
 from config import settings
 
 router = Router()
+logger = logging.getLogger(__name__)
 market = MarketService()
 news = NewsCacheService()
 
@@ -839,21 +841,51 @@ async def brief(message: Message) -> None:
     if not allowed:
         await message.answer(f"⚠️ <b>Brief limit reached</b>: {limit}/day on your current plan.")
         return
+
     status = await message.answer("⏳ <b>Preparing your Daily Market Brief...</b>")
     try:
         report = await _collect_brief_report()
+    except Exception as exc:
+        logger.exception("Brief collection failed for user %s", message.from_user.id)
+        await status.edit_text(
+            "⚠️ <b>Market data is temporarily unavailable.</b>\n"
+            "Please try again shortly."
+        )
+        return
+
+    try:
         await _save_latest_brief(message.from_user.id, report)
+    except Exception:
+        logger.exception("Could not save latest brief for user %s", message.from_user.id)
+
+    try:
         await consume_brief_success(message.from_user.id, message.from_user.username)
+    except Exception:
+        logger.exception("Could not record brief usage for user %s", message.from_user.id)
+
+    try:
         rendered = _render_brief(report)
-        # Keep the final Telegram message safely below Telegram's 4096-character limit.
         if len(rendered) > 3900:
             rendered = rendered[:3890].rstrip() + "\n\n…\n\n⚠️ <i>Some detail was truncated for Telegram.</i>"
         await status.edit_text(rendered, reply_markup=_brief_keyboard())
     except Exception:
-        await status.edit_text(
-            "⚠️ <b>We couldn't generate the market brief right now.</b>\n"
-            "Please try again later."
-        )
+        logger.exception("Brief rendering failed for user %s", message.from_user.id)
+        # Final deterministic text guarantee: even if rich rendering changes later,
+        # the user still gets a usable market snapshot instead of a generic failure.
+        lines = ["🌅 <b>DAILY MARKET BRIEF</b>", "", f"🤖 <b>{escape(BOT_USERNAME)}</b>", ""]
+        for quote in report.get("quotes", [])[:5]:
+            lines.append(
+                f"<b>{escape(str(quote.get('label', quote.get('symbol', ''))))}</b> "
+                f"<code>{escape(str(quote.get('price_text', 'n/a')))}</code> "
+                f"{escape(str(quote.get('move_text', 'n/a')))}"
+            )
+        lines.extend([
+            "",
+            escape(str(report.get("executive_summary", "Market snapshot available; AI commentary was unavailable."))),
+            "",
+            "⚠️ <i>Market information for orientation only.</i>",
+        ])
+        await status.edit_text("\n".join(lines), reply_markup=_brief_keyboard())
 
 
 @router.message(Command("brief_pdf"))
