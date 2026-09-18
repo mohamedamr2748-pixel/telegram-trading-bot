@@ -83,4 +83,4 @@ External data providers can fail or return stale data. The application uses prov
 
 ## AI Daily Brief
 
-The Daily Market Brief uses OpenRouter for AI-generated market context. The current primary free model is google/gemma-4-26b-a4b-it:free, with openrouter/free as a fallback. The bot shares a five-minute cached market snapshot, so repeated users do not trigger one AI request per user. Configure OPENROUTER_API_KEY in Railway/.env; never commit the key. Free OpenRouter models are rate-limited and provider availability can vary.
+The Daily Market Brief uses OpenRouter for AI-generated market context. The current primary free model is openrouter/free, with openrouter/free as a fallback. The bot shares a five-minute cached market snapshot, so repeated users do not trigger one AI request per user. Configure OPENROUTER_API_KEY in Railway/.env; never commit the key. Free OpenRouter models are rate-limited and provider availability can vary.
