@@ -225,5 +225,8 @@ async def generate_market_brief(snapshot: dict[str, Any]) -> dict[str, Any]:
     report["generated_at"] = datetime.now(timezone.utc).isoformat()
     report["model"] = selected_model
     report["bot_username"] = BOT_USERNAME
+    # Cache the complete report with the exact market/news snapshot used to generate it.
+    # This prevents AI commentary from describing a different snapshot than the one shown to users.
+    report.update(snapshot)
     _shared_cache = (bucket, report)
     return report
