@@ -20,6 +20,11 @@ class Settings(BaseSettings):
     purge_market_cache_on_startup: bool = False
     port: int = 8080
     log_level: str = "INFO"
+    # Telegram Stars subscription settings. Keep price at 0 until pricing is configured.
+    pro_price_stars: int = 0
+    pro_plan_name: str = "Tickaro Pro"
+    pro_plan_description: str = "Unlock higher limits and premium trading workflows with Tickaro Pro."
+    subscription_terms_url: str = ""
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", case_sensitive=False)
 
