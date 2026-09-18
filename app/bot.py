@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
+from datetime import datetime, timezone
+from html import escape
 from io import BytesIO
 
 import pandas as pd
@@ -12,10 +15,13 @@ from sqlalchemy import func, select
 
 from app.alerts import create_price_alert, create_smart_alert, list_alerts, remove_alert
 from app.charts import render_chart
-from app.db import Alert, Watchlist, WatchlistItem, consume_usage, get_or_create_user, session_factory
+from app.ai_brief import BOT_USERNAME, generate_market_brief
+from app.brief_pdf import build_brief_pdf
+from app.db import BriefReport, Alert, Watchlist, WatchlistItem, consume_usage, get_or_create_user, session_factory
 from app.domain import MarketQuote
 from app.indicators import add_basic_indicators
 from app.market import MarketService
+from app.movers import get_top_movers
 from app.news_cache import NewsCacheService
 from app.subscriptions import effective_plan, install as install_subscriptions, is_active_paid_plan
 from config import settings
@@ -126,9 +132,20 @@ def ticker_format_image() -> BytesIO:
     return output
 
 
+def _plan_brief_limit(plan: str) -> int | None:
+    return {"free": 1, "pro": 10, "unlimited": None}.get(plan, 1)
+
+
 async def limit_for_user(user_id: int, username: str | None, key: str) -> bool:
     async with session_factory() as session:
         user = await get_or_create_user(session, user_id, username)
+        plan = effective_plan(user)
+        if key == "brief":
+            limit = _plan_brief_limit(plan)
+            if limit is None:
+                return True
+            ok, _ = await consume_usage(session, user.id, key, limit)
+            return ok
         if is_active_paid_plan(user):
             return True
         ok, _ = await consume_usage(session, user.id, key, LIMITS[key])
@@ -138,7 +155,11 @@ async def limit_for_user(user_id: int, username: str | None, key: str) -> bool:
 async def limit_or_message(message: Message, key: str) -> bool:
     ok = await limit_for_user(message.from_user.id, message.from_user.username, key)
     if not ok:
-        await message.answer(f"⚠️ Free plan limit reached: <b>{LIMITS[key]}/day</b> for {key}.")
+        async with session_factory() as session:
+            user = await get_or_create_user(session, message.from_user.id, message.from_user.username)
+            plan = effective_plan(user)
+        limit = _plan_brief_limit(plan) if key == "brief" else LIMITS[key]
+        await message.answer(f"⚠️ <b>{key.title()} limit reached</b>: {limit}/day on your current plan.")
     return ok
 
 
@@ -163,7 +184,8 @@ async def help_cmd(message: Message) -> None:
         "<b>Market</b>\n"
         "/price SYMBOL — live quote\n"
         "/market — market overview\n"
-        "/brief — daily market brief\n\n"
+        "/brief — AI-powered daily market brief\n"
+        "/brief_pdf — export your latest brief as PDF\n\n"
         "<b>Analysis</b>\n"
         "/chart SYMBOL [PERIOD] [advanced]\n"
         "/why SYMBOL — move context\n"
@@ -207,6 +229,7 @@ async def account(message: Message) -> None:
             )
         )
         usage = dict(usage_result.all())
+        brief_limit = "∞" if effective_plan(user) == "unlimited" else str(_plan_brief_limit(effective_plan(user)))
 
         await message.answer(
             "👤 <b>MY ACCOUNT</b>\n\n"
@@ -226,7 +249,7 @@ async def account(message: Message) -> None:
             f"Charts: {usage.get('chart', 0)}/10\n"
             f"News: {usage.get('news', 0)}/30\n"
             f"Scanner: {usage.get('scanner', 0)}/5\n"
-            f"Brief: {usage.get('brief', 0)}/1\n"
+            f"Brief: {usage.get('brief', 0)}/{brief_limit}\n"
             f"Why: {usage.get('why', 0)}/3\n"
             f"Advanced: {usage.get('advanced', 0)}/3"
         , reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⭐ Subscribe / Manage Pro", callback_data="subscribe:show")]]) if effective_plan(user) != "unlimited" else None
@@ -559,22 +582,263 @@ async def market_cmd(message: Message) -> None:
     await message.answer("\n".join(lines))
 
 
+BRIEF_SYMBOLS = ["^GSPC", "^IXIC", "^DJI", "BTC-USD", "GC=F"]
+BRIEF_LABELS = {
+    "^GSPC": "S&P 500",
+    "^IXIC": "NASDAQ",
+    "^DJI": "Dow Jones",
+    "BTC-USD": "Bitcoin",
+    "GC=F": "Gold",
+}
+
+
+def _brief_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="📄 Export to PDF", callback_data="brief:pdf")],
+        ]
+    )
+
+
+def _brief_quote_snapshot(symbol: str, quote: MarketQuote) -> dict:
+    return {
+        "symbol": symbol,
+        "label": BRIEF_LABELS.get(symbol, symbol),
+        "price": float(quote.price),
+        "price_text": f"{float(quote.price):,.2f}",
+        "change_percent": float(quote.change_percent) if quote.change_percent is not None else None,
+        "move_text": _move_badge(quote.change_percent),
+        "open": float(quote.open) if quote.open is not None else None,
+        "high": float(quote.high) if quote.high is not None else None,
+        "low": float(quote.low) if quote.low is not None else None,
+        "volume": float(quote.volume) if quote.volume is not None else 0.0,
+        "previous_close": float(quote.previous_close) if quote.previous_close is not None else None,
+        "market_status": quote.market_status or "unknown",
+        "timestamp": quote.timestamp.astimezone(timezone.utc).isoformat(),
+        "source": quote.source,
+        "stale": quote.is_stale,
+    }
+
+
+def _brief_news_snapshot(item, news_id: str) -> dict:
+    return {
+        "id": news_id,
+        "title": item.title,
+        "url": item.url,
+        "source": item.source,
+        "published_at": item.published_at.astimezone(timezone.utc).isoformat() if item.published_at else None,
+        "relevance": int(item.relevance),
+        "urgency": int(item.urgency),
+    }
+
+
+def _brief_time(value: str | None) -> str:
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).astimezone(timezone.utc).strftime("%d %b %Y • %H:%M UTC")
+    except (TypeError, ValueError):
+        return "time unavailable"
+
+
+def _brief_pct(value: object) -> str:
+    try:
+        return f"{float(value):+.2f}%"
+    except (TypeError, ValueError):
+        return "n/a"
+
+
+def _render_brief(report: dict) -> str:
+    quotes = report.get("quotes", [])
+    movers = report.get("movers", {})
+    news_items = report.get("news", [])
+    drivers = {str(x.get("news_id")): x for x in report.get("news_implications", []) if isinstance(x, dict)}
+    lines = [
+        "🌅 <b>DAILY MARKET BRIEF</b>",
+        "━━━━━━━━━━━━━━━━━━━━",
+        f"🕒 <code>{escape(_brief_time(report.get('generated_at')))}</code>",
+        f"🤖 <b>{escape(BOT_USERNAME)}</b>",
+        "",
+        f"🎯 <b>MARKET PULSE • {escape(str(report.get('market_regime', 'Mixed')))}</b>",
+        escape(str(report.get("executive_summary", "")).strip()) or "No executive summary available.",
+        "",
+        "📊 <b>CROSS-ASSET SNAPSHOT</b>",
+    ]
+    for quote in quotes[:5]:
+        label = escape(str(quote.get("label", quote.get("symbol", ""))))
+        price = escape(str(quote.get("price_text", "n/a")))
+        move = escape(str(quote.get("move_text", "n/a")))
+        status = str(quote.get("market_status", "unknown")).replace("_", " ").title()
+        stale = " • STALE" if quote.get("stale") else ""
+        lines.append(f"<b>{label}</b>  <code>{price}</code>  {move}  <i>{escape(status + stale)}</i>")
+
+    lines.extend(["", "🧠 <b>ANALYST READ</b>"])
+    for item in report.get("cross_asset_insights", [])[:4]:
+        lines.append(f"• {escape(str(item))}")
+
+    lines.extend(["", "🔥 <b>TOP US EQUITY MOVERS</b>"])
+    gainers = movers.get("gainers", [])[:3]
+    losers = movers.get("losers", [])[:3]
+    lines.append(
+        "<b>Gainers:</b> " + (
+            " • ".join(f"<code>{escape(str(m.get('symbol')))}</code> {_brief_pct(m.get('percent_change'))}" for m in gainers)
+            if gainers else "n/a"
+        )
+    )
+    lines.append(
+        "<b>Losers:</b> " + (
+            " • ".join(f"<code>{escape(str(m.get('symbol')))}</code> {_brief_pct(m.get('percent_change'))}" for m in losers)
+            if losers else "n/a"
+        )
+    )
+
+    lines.extend(["", "📰 <b>NEWS SIGNALS</b>"])
+    for item in news_items[:5]:
+        title = escape(str(item.get("title", "Untitled")))
+        source = escape(str(item.get("source", "Unknown")))
+        stamp = _brief_time(item.get("published_at"))
+        lines.append(f"• <b>{title}</b>")
+        lines.append(f"  <i>{source} • {escape(stamp)}</i>")
+        driver = drivers.get(str(item.get("id")))
+        if driver and driver.get("point"):
+            lines.append(f"  ↳ {escape(str(driver['point']))}")
+
+    lines.extend(["", "⚠️ <b>RISK WATCH</b>"])
+    risk = report.get("risk_watch", [])
+    if risk:
+        lines.extend(f"• {escape(str(x))}" for x in risk[:4])
+    else:
+        lines.append("• No specific risk item was supported by the supplied snapshot.")
+
+    lines.extend(["", "👀 <b>WATCH NEXT</b>"])
+    watch_next = report.get("watch_next", [])
+    if watch_next:
+        lines.extend(f"• {escape(str(x))}" for x in watch_next[:4])
+    else:
+        lines.append("• Monitor fresh prices and market-moving headlines.")
+
+    lines.extend([
+        "",
+        "━━━━━━━━━━━━━━━━━━━━",
+        f"ℹ️ <i>{escape(str(report.get('data_quality', 'Based on the latest available snapshot.')))}</i>",
+        "",
+        "⚠️ <i>Market information and AI-generated context for orientation, not personalised investment advice.</i>",
+    ])
+    return "\n".join(lines)
+
+
+async def _save_latest_brief(user_id: int, report: dict) -> None:
+    payload = json.dumps(report, ensure_ascii=False)
+    async with session_factory() as session:
+        row = await session.scalar(select(BriefReport).where(BriefReport.user_id == user_id))
+        if row is None:
+            session.add(BriefReport(user_id=user_id, report_json=payload))
+        else:
+            row.report_json = payload
+            row.created_at = datetime.now(timezone.utc)
+        await session.commit()
+
+
+async def _get_latest_brief(user_id: int) -> dict | None:
+    async with session_factory() as session:
+        row = await session.scalar(select(BriefReport).where(BriefReport.user_id == user_id))
+    if row is None:
+        return None
+    try:
+        data = json.loads(row.report_json)
+    except (TypeError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+async def _collect_brief_report() -> dict:
+    quotes_result, movers_result, news_items = await asyncio.gather(
+        asyncio.gather(*(market.get_quote(s) for s in BRIEF_SYMBOLS), return_exceptions=True),
+        get_top_movers(),
+        news.get("market", 8),
+    )
+    quotes = [
+        _brief_quote_snapshot(symbol, quote)
+        for symbol, quote in zip(BRIEF_SYMBOLS, quotes_result)
+        if not isinstance(quote, Exception)
+    ]
+    gainers, losers = movers_result
+    movers = {
+        "gainers": [
+            {"symbol": row.symbol, "name": row.name, "percent_change": float(row.percent_change)}
+            for row in gainers
+        ],
+        "losers": [
+            {"symbol": row.symbol, "name": row.name, "percent_change": float(row.percent_change)}
+            for row in losers
+        ],
+    }
+    news_snapshot = [
+        _brief_news_snapshot(item, f"N{idx}")
+        for idx, item in enumerate(news_items[:8], 1)
+    ]
+    snapshot = {
+        "as_of": datetime.now(timezone.utc).isoformat(),
+        "quotes": quotes,
+        "movers": movers,
+        "news": news_snapshot,
+    }
+    ai = await generate_market_brief(snapshot)
+    return {**snapshot, **ai}
+
+
 @router.message(Command("brief"))
 async def brief(message: Message) -> None:
     if not await limit_or_message(message, "brief"):
         return
-    symbols = ["^GSPC", "^IXIC", "BTC-USD", "GC=F"]
-    quotes = await asyncio.gather(*(market.get_quote(s) for s in symbols), return_exceptions=True)
-    news_items = await news.get("market", 5)
-    lines = ["🌅 <b>Daily Market Brief</b>", ""]
-    for symbol, quote in zip(symbols, quotes):
-        if not isinstance(quote, Exception):
-            lines.append(f"{_market_label(symbol)}  <code>{quote.price:.6g}</code>  {_move_badge(quote.change_percent)}")
-    if news_items:
-        lines.append("\n📰 <b>Top headlines</b>")
-        lines.extend([f"• {x.title}" for x in news_items[:3]])
-    lines.append("\n<i>Snapshot for orientation, not investment advice.</i>")
-    await message.answer("\n".join(lines))
+    status = await message.answer("⏳ <b>Preparing your Daily Market Brief...</b>")
+    try:
+        report = await _collect_brief_report()
+        await _save_latest_brief(message.from_user.id, report)
+        rendered = _render_brief(report)
+        # Keep the final Telegram message safely below Telegram's 4096-character limit.
+        if len(rendered) > 3900:
+            rendered = rendered[:3890].rstrip() + "\n\n…\n\n⚠️ <i>Some detail was truncated for Telegram.</i>"
+        await status.edit_text(rendered, reply_markup=_brief_keyboard())
+    except Exception:
+        await status.edit_text(
+            "⚠️ <b>We couldn't generate the market brief right now.</b>\n"
+            "Please try again later."
+        )
+
+
+@router.message(Command("brief_pdf"))
+async def brief_pdf_command(message: Message) -> None:
+    report = await _get_latest_brief(message.from_user.id)
+    if not report:
+        await message.answer("📄 No saved brief is available yet. Run <code>/brief</code> first.")
+        return
+    try:
+        pdf = build_brief_pdf(report)
+        filename = f"tickaro-brief-{datetime.now(timezone.utc):%Y%m%d-%H%M}.pdf"
+        await message.answer_document(
+            BufferedInputFile(pdf.getvalue(), filename=filename),
+            caption=f"📄 <b>Tickaro Daily Market Brief</b> • {escape(_brief_time(report.get('generated_at')))}\n🤖 {escape(BOT_USERNAME)}",
+        )
+    except Exception:
+        await message.answer("⚠️ PDF export failed. Please try again later.")
+
+
+@router.callback_query(F.data == "brief:pdf")
+async def brief_pdf_callback(callback: CallbackQuery) -> None:
+    report = await _get_latest_brief(callback.from_user.id)
+    if not report:
+        await callback.message.answer("📄 No saved brief is available. Run <code>/brief</code> first.")
+        await callback.answer()
+        return
+    try:
+        pdf = build_brief_pdf(report)
+        filename = f"tickaro-brief-{datetime.now(timezone.utc):%Y%m%d-%H%M}.pdf"
+        await callback.message.answer_document(
+            BufferedInputFile(pdf.getvalue(), filename=filename),
+            caption=f"📄 <b>Tickaro Daily Market Brief</b> • {escape(_brief_time(report.get('generated_at')))}\n🤖 {escape(BOT_USERNAME)}",
+        )
+        await callback.answer("PDF ready")
+    except Exception:
+        await callback.answer("PDF export failed", show_alert=True)
 
 
 @router.callback_query(F.data.startswith("chart:"))
@@ -674,7 +938,7 @@ async def menu_callback(callback: CallbackQuery) -> None:
         "news": "📰 Use <code>/news SYMBOL</code>.",
         "alerts": "🔔 Use <code>/alerts</code> or <code>/alert SYMBOL above 200</code>.",
         "scanner": "🔎 Use <code>/scanner</code>, <code>/scanner volume_spike</code> or another scanner mode.",
-        "brief": "🌅 Use <code>/brief</code> for the daily summary.",
+        "brief": "🌅 Use <code>/brief</code> for the AI-powered market brief.\n📄 Export the latest report with <code>/brief_pdf</code>.",
         "account": "👤 Use <code>/account</code> to see your plan and usage.",
     }
     await callback.message.answer(prompts.get(target, "Use <code>/help</code> to see available commands."))
