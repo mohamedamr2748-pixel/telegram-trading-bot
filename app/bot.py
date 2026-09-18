@@ -18,7 +18,7 @@ from app.alerts import create_price_alert, create_smart_alert, list_alerts, remo
 from app.charts import render_chart
 from app.ai_brief import BOT_USERNAME, generate_market_brief
 from app.brief_pdf import build_brief_pdf
-from app.db import BriefReport, Alert, Watchlist, WatchlistItem, consume_usage, get_or_create_user, session_factory
+from app.db import BriefReport, Alert, Watchlist, WatchlistItem, consume_usage, delete_latest_brief_report, get_or_create_user, is_owner, session_factory
 from app.domain import MarketQuote
 from app.indicators import add_basic_indicators
 from app.market import MarketService
@@ -925,6 +925,27 @@ async def brief(message: Message) -> None:
         await consume_brief_success(message.from_user.id, message.from_user.username)
     except Exception:
         logger.exception("Could not record brief usage for user %s", message.from_user.id)
+
+
+@router.message(Command("delete_brief_pdf"))
+async def delete_brief_pdf_command(message: Message) -> None:
+    async with session_factory() as session:
+        allowed = await is_owner(session, message.from_user.id, message.from_user.username)
+    if not allowed:
+        await message.answer("⛔ <b>Owner-only command.</b>")
+        return
+
+    deleted, created_at = await delete_latest_brief_report()
+    if not deleted:
+        await message.answer("📭 No stored Daily Brief report is available to delete.")
+        return
+
+    stamp = created_at.strftime("%d %b %Y • %H:%M UTC") if created_at else "unknown time"
+    await message.answer(
+        "🗑️ <b>Latest Daily Brief removed.</b>\n"
+        f"Stored report created at <code>{stamp}</code> was deleted.\n"
+        "Future PDF export for that report is no longer available."
+    )
 
 
 @router.message(Command("brief_pdf"))
