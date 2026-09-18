@@ -854,24 +854,15 @@ async def brief(message: Message) -> None:
         return
 
     try:
-        await _save_latest_brief(message.from_user.id, report)
-    except Exception:
-        logger.exception("Could not save latest brief for user %s", message.from_user.id)
-
-    try:
-        await consume_brief_success(message.from_user.id, message.from_user.username)
-    except Exception:
-        logger.exception("Could not record brief usage for user %s", message.from_user.id)
-
-    try:
         rendered = _render_brief(report)
         if len(rendered) > 3900:
             rendered = rendered[:3890].rstrip() + "\n\n…\n\n⚠️ <i>Some detail was truncated for Telegram.</i>"
-        await status.edit_text(rendered, reply_markup=_brief_keyboard())
+        # Send the completed report as a new message. This avoids turning a valid
+        # brief into an error because an edit of the progress message is rejected.
+        await message.answer(rendered, reply_markup=_brief_keyboard())
     except Exception:
-        logger.exception("Brief rendering failed for user %s", message.from_user.id)
-        # Final deterministic text guarantee: even if rich rendering changes later,
-        # the user still gets a usable market snapshot instead of a generic failure.
+        logger.exception("Brief rendering/delivery failed for user %s", message.from_user.id)
+        # Final deterministic text guarantee.
         lines = ["🌅 <b>DAILY MARKET BRIEF</b>", "", f"🤖 <b>{escape(BOT_USERNAME)}</b>", ""]
         for quote in report.get("quotes", [])[:5]:
             lines.append(
@@ -885,7 +876,17 @@ async def brief(message: Message) -> None:
             "",
             "⚠️ <i>Market information for orientation only.</i>",
         ])
-        await status.edit_text("\n".join(lines), reply_markup=_brief_keyboard())
+        await message.answer("\n".join(lines), reply_markup=_brief_keyboard())
+
+    try:
+        await _save_latest_brief(message.from_user.id, report)
+    except Exception:
+        logger.exception("Could not save latest brief for user %s", message.from_user.id)
+
+    try:
+        await consume_brief_success(message.from_user.id, message.from_user.username)
+    except Exception:
+        logger.exception("Could not record brief usage for user %s", message.from_user.id)
 
 
 @router.message(Command("brief_pdf"))
