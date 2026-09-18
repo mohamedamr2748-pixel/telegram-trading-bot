@@ -31,6 +31,7 @@ class User(Base):
     telegram_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
     username: Mapped[str | None] = mapped_column(String(255), nullable=True)
     plan: Mapped[str] = mapped_column(String(32), default="free")
+    plan_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     timezone: Mapped[str] = mapped_column(String(64), default="UTC")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
@@ -110,6 +111,22 @@ class Usage(Base):
     __table_args__ = (UniqueConstraint("user_id", "day", "key", name="uq_usage"),)
 
 
+class SubscriptionPayment(Base):
+    __tablename__ = "subscription_payments"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    plan: Mapped[str] = mapped_column(String(32), default="pro")
+    telegram_payment_charge_id: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    provider_payment_charge_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    invoice_payload: Mapped[str] = mapped_column(String(255), index=True)
+    currency: Mapped[str] = mapped_column(String(8), default="XTR")
+    amount_stars: Mapped[int] = mapped_column(Integer)
+    subscription_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    paid_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    is_recurring: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_first_recurring: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
 engine = create_async_engine(_normalise_database_url(settings.database_url), pool_pre_ping=True)
 session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
@@ -119,6 +136,12 @@ async def init_db() -> None:
         await conn.run_sync(Base.metadata.create_all)
         if conn.dialect.name == "postgresql":
             await conn.execute(text("ALTER TABLE users ALTER COLUMN telegram_id TYPE BIGINT"))
+            await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS plan_expires_at TIMESTAMP WITH TIME ZONE"))
+        else:
+            result = await conn.execute(text("PRAGMA table_info(users)"))
+            columns = {row[1] for row in result.fetchall()}
+            if "plan_expires_at" not in columns:
+                await conn.execute(text("ALTER TABLE users ADD COLUMN plan_expires_at DATETIME"))
 
 
 async def get_or_create_user(session: AsyncSession, telegram_id: int, username: str | None) -> User:
