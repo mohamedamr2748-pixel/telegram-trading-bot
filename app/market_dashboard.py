@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import datetime, timezone
 from html import escape
 
 import pandas as pd
 from aiogram import F
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import BufferedInputFile, CallbackQuery, CopyTextButton, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, Message
 
 from app.chart_display_symbols import chart_display_symbol, normalise_market_symbol
@@ -19,6 +21,8 @@ PRICE_DIGITS = {symbol: 2 for symbol in SYMBOLS}
 
 # Price controls are candle intervals. The visible data window is chosen so each
 # interval has enough observations for a useful 120-candle chart.
+logger = logging.getLogger(__name__)
+
 PRICE_TIMEFRAMES: dict[str, tuple[str, str, str | None]] = {
     "1M": ("1d", "1m", None),
     "5M": ("5d", "5m", None),
@@ -220,9 +224,19 @@ async def _send_price_card(target: Message | CallbackQuery, symbol: str, timefra
         volume_override = await _caption_volume_4h(symbol, df) if timeframe.upper() == "4H" else None
         caption, copy_price = _price_caption(symbol, timeframe, df, quote, volume_override=volume_override); keyboard = _price_keyboard(symbol, timeframe, copy_price); media = BufferedInputFile(image.getvalue(), filename=f"{symbol.replace('/', '_')}.png")
         if edit and isinstance(target, CallbackQuery):
-            await target.message.edit_media(media=InputMediaPhoto(media=media, caption=caption, parse_mode="HTML"), reply_markup=keyboard)
+            try:
+                await target.message.edit_media(media=InputMediaPhoto(media=media, caption=caption, parse_mode="HTML"), reply_markup=keyboard)
+            except TelegramBadRequest as exc:
+                # Refreshing an unchanged chart can legitimately return Telegram's
+                # "message is not modified". Treat that as a successful no-op so
+                # users do not get a false error.
+                if "message is not modified" in str(exc).lower():
+                    return True
+                logger.exception("Telegram failed to update %s %s chart", symbol, timeframe)
+                raise
         else:
-            message = target.message if isinstance(target, CallbackQuery) else target; await message.answer_photo(media, caption=caption, reply_markup=keyboard)
+            message = target.message if isinstance(target, CallbackQuery) else target
+            await message.answer_photo(media, caption=caption, reply_markup=keyboard)
         return True
     except ValueError:
         message = target.message if isinstance(target, CallbackQuery) else target; guide = ticker_format_image(); await message.answer_photo(BufferedInputFile(guide.getvalue(), filename="ticker-format-guide.png"), caption=f"❌ <b>Invalid ticker</b>\n\nWe couldn't find price/chart data for <code>{symbol}</code>.\n\nPlease check the ticker format and try again."); return False
