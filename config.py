@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     subscription_terms_url: str = ""
     # OpenRouter AI brief settings. Keep the API key server-side only.
     openrouter_api_key: str = ""
-    openrouter_model: str = "inclusionai/ling-3.0-flash-fin:free"
+    openrouter_model: str = "google/gemma-4-26b-a4b-it:free"
     openrouter_fallback_model: str = "openrouter/free"
     openrouter_referer: str = "https://tickaro.app"
 

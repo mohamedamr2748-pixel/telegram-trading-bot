@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 BOT_USERNAME = "@TickaroBot"
-PRIMARY_MODEL = "inclusionai/ling-3.0-flash-fin:free"
+PRIMARY_MODEL = "google/gemma-4-26b-a4b-it:free"
 FALLBACK_MODEL = "openrouter/free"
 CACHE_TTL_SECONDS = 5 * 60
 
@@ -130,7 +130,8 @@ async def _request(model: str, prompt: str) -> dict[str, Any]:
             {"role": "user", "content": prompt},
         ],
         "temperature": 0.15,
-        "max_tokens": 1500,
+        "max_tokens": 1800,
+        "response_format": {"type": "json_object"},
     }
     async with httpx.AsyncClient(timeout=25) as client:
         response = await client.post(OPENROUTER_URL, headers=headers, json=body)
@@ -140,9 +141,14 @@ async def _request(model: str, prompt: str) -> dict[str, Any]:
     choices = data.get("choices") if isinstance(data, dict) else None
     if not choices:
         raise ValueError("OpenRouter returned no choices")
-    content = choices[0].get("message", {}).get("content")
+    message = choices[0].get("message", {}) or {}
+    content = message.get("content")
     if not isinstance(content, str) or not content.strip():
-        raise ValueError("OpenRouter returned empty content")
+        finish_reason = choices[0].get("finish_reason", "unknown")
+        refusal = message.get("refusal")
+        raise ValueError(
+            f"OpenRouter returned empty content (finish_reason={finish_reason}, refusal={refusal!r})"
+        )
     return _normalise_report(_json_from_text(content))
 
 
