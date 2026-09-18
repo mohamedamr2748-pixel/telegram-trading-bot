@@ -181,7 +181,7 @@ async def get_or_create_user(session: AsyncSession, telegram_id: int, username: 
 async def is_owner(session: AsyncSession, telegram_id: int, username: str | None = None) -> bool:
     # Prefer the persisted owner Telegram ID once the owner's account exists.
     owner_row = await session.scalar(
-        select(User.telegram_id).where(User.username == OWNER_USERNAME).limit(1)
+        select(User.telegram_id).where(User.username.ilike(OWNER_USERNAME)).limit(1)
     )
     if owner_row is not None:
         return int(owner_row) == int(telegram_id)
