@@ -634,6 +634,10 @@ def _brief_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="📰 News", callback_data="brief:news"),
                 InlineKeyboardButton(text="⭐ Watchlist", callback_data="brief:watchlist"),
             ],
+            [
+                InlineKeyboardButton(text="🔎 Scanner", callback_data="brief:scanner"),
+                InlineKeyboardButton(text="📈 Movers", callback_data="brief:movers"),
+            ],
         ]
     )
 
@@ -955,6 +959,22 @@ async def brief_news_callback(callback: CallbackQuery) -> None:
 @router.callback_query(F.data == "brief:watchlist")
 async def brief_watchlist_callback(callback: CallbackQuery) -> None:
     await callback.message.answer("⭐ <b>Watchlist</b>\nUse <code>/watchlist</code> to open your tracked assets.")
+    await callback.answer()
+
+
+@router.callback_query(F.data == "brief:scanner")
+async def brief_scanner_callback(callback: CallbackQuery) -> None:
+    await callback.message.answer(
+        "🔎 <b>Scanner</b>\nUse <code>/scanner</code> for gainers, losers, volume spikes, and RSI scans."
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "brief:movers")
+async def brief_movers_callback(callback: CallbackQuery) -> None:
+    await callback.message.answer(
+        "📈 <b>Market Movers</b>\nUse <code>/scanner</code> to see the current top US equity gainers and losers."
+    )
     await callback.answer()
 
 
