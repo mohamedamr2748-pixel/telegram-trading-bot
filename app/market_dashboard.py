@@ -108,9 +108,16 @@ async def market_cmd(message: Message) -> None:
     text, keyboard = await _snapshot(MarketService()); await message.answer(text, reply_markup=keyboard)
 
 async def _market_chart(callback: CallbackQuery, symbol: str) -> None:
-    # Market tickers open the same full /price card used elsewhere in the bot,
-    # with the default 4H timeframe and the same chart, caption, and controls.
-    await _send_price_card(callback, symbol, "4H", edit=False, limit_key="chart")
+    from app.bot import limit_for_user, ticker_format_image
+    if not await limit_for_user(callback.from_user.id, callback.from_user.username, "chart"):
+        await callback.message.answer("⚠️ Free plan limit reached: <b>10/day</b> for chart."); return
+    try:
+        df = await MarketService().get_history(symbol, period="1d", interval="15m")
+        display_symbol = chart_display_symbol(symbol); image = await render_chart(df, display_symbol, "1d/15m")
+        await callback.message.answer_photo(BufferedInputFile(image.getvalue(), filename=f"{symbol}.png"), caption=f"📈 <b>{display_symbol}</b> • 1d/15m • UTC")
+    except ValueError:
+        guide = ticker_format_image(); await callback.message.answer_photo(BufferedInputFile(guide.getvalue(), filename="ticker-format-guide.png"), caption=f"❌ <b>Invalid ticker</b>\n\nWe couldn't find chart data for <code>{symbol}</code>.\n\nPlease check the ticker format and try again.")
+    except Exception: await callback.message.answer(f"⚠️ We couldn't generate a chart for <b>{symbol}</b> right now. Please try again later.")
 
 def _normalise_price_symbol(symbol: str) -> str:
     raw = chart_display_symbol(symbol)
@@ -203,21 +210,12 @@ def _price_keyboard(symbol: str, timeframe: str, copy_price: str) -> InlineKeybo
         tf_rows.append(row)
     return InlineKeyboardMarkup(inline_keyboard=[*tf_rows, [InlineKeyboardButton(text="🔄 Refresh", callback_data=f"priceui:r:{timeframe}:{symbol}", style="success"), InlineKeyboardButton(text="📋 Copy price", copy_text=CopyTextButton(text=copy_price))]])
 
-async def _send_price_card(
-    target: Message | CallbackQuery,
-    symbol: str,
-    timeframe: str,
-    *,
-    edit: bool = False,
-    limit_key: str = "price",
-) -> bool:
+async def _send_price_card(target: Message | CallbackQuery, symbol: str, timeframe: str, *, edit: bool = False) -> bool:
     from app.bot import limit_for_user, ticker_format_image
     symbol = normalise_market_symbol(symbol)
     user = target.from_user
-    if not await limit_for_user(user.id, user.username, limit_key):
-        message = target.message if isinstance(target, CallbackQuery) else target
-        limit_text = "10/day" if limit_key == "chart" else "50/day"
-        await message.answer(f"⚠️ Free plan limit reached: <b>{limit_text}</b>."); return False
+    if not await limit_for_user(user.id, user.username, "price"):
+        message = target.message if isinstance(target, CallbackQuery) else target; await message.answer("⚠️ Free plan limit reached: <b>50/day</b> for price."); return False
     try:
         market = MarketService(); quote = await market.get_quote(symbol); df = await _get_price_history(symbol, timeframe)
         if df.empty: raise ValueError("No chart data returned")
