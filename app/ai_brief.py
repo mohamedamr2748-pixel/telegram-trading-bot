@@ -27,15 +27,26 @@ def _json_from_text(text: str) -> dict[str, Any]:
     fenced = re.search(r"\x60{3}(?:json)?\s*(.*?)\s*\x60{3}", cleaned, flags=re.DOTALL | re.IGNORECASE)
     if fenced:
         cleaned = fenced.group(1).strip()
-    if not cleaned.startswith("{"):
-        start = cleaned.find("{")
-        end = cleaned.rfind("}")
-        if start >= 0 and end > start:
-            cleaned = cleaned[start:end + 1]
-    payload = json.loads(cleaned)
-    if not isinstance(payload, dict):
-        raise ValueError("OpenRouter returned a non-object JSON response")
-    return payload
+
+    # Models can occasionally return a JSON object followed by extra commentary
+    # or another JSON fragment. raw_decode lets us safely extract the first object.
+    decoder = json.JSONDecoder()
+    candidates = [cleaned]
+    start = cleaned.find("{")
+    if start > 0:
+        candidates.append(cleaned[start:])
+
+    last_error: Exception | None = None
+    for candidate in candidates:
+        try:
+            payload, _ = decoder.raw_decode(candidate.lstrip())
+            if isinstance(payload, dict):
+                return payload
+            last_error = ValueError("OpenRouter returned a non-object JSON response")
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            last_error = exc
+
+    raise ValueError(f"OpenRouter returned invalid JSON: {last_error}")
 
 
 def _normalise_list(value: Any, max_items: int = 5) -> list[str]:
