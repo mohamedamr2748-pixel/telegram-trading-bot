@@ -343,11 +343,11 @@ async def render_google_finance_chart(
     rows = legacy._asset_stats_rows(symbol, quote, stats, period_perf)
     # Keep all footer statistics as one compact information block.
     y_positions = [0.223, 0.190, 0.157]
-    x_positions_text = [0.055, 0.22, 0.385]
+    x_positions_text = [0.055, 0.190, 0.325]
     for ypos, row in zip(y_positions, rows):
         for xpos, (label, value) in zip(x_positions_text, row):
-            fig.text(xpos, ypos, label, ha="left", va="center", fontsize=8.5, color="#9aa0a6")
-            fig.text(xpos + 0.080, ypos, value, ha="left", va="center", fontsize=9.5, fontweight="bold", color="#f8fafc")
+            fig.text(xpos, ypos, label, ha="left", va="center", fontsize=8.25, color="#9aa0a6")
+            fig.text(xpos + 0.070, ypos, value, ha="left", va="center", fontsize=9.25, fontweight="bold", color="#f8fafc")
 
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=legacy._STANDARD_DPI, bbox_inches="tight", pad_inches=0.08, facecolor=fig.get_facecolor(), edgecolor="none", pil_kwargs={"compress_level": 1})
