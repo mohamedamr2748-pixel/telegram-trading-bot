@@ -178,6 +178,31 @@ async def get_or_create_user(session: AsyncSession, telegram_id: int, username: 
     return user
 
 
+async def is_owner(session: AsyncSession, telegram_id: int, username: str | None = None) -> bool:
+    # Prefer the persisted owner Telegram ID once the owner's account exists.
+    owner_row = await session.scalar(
+        select(User.telegram_id).where(User.username == OWNER_USERNAME).limit(1)
+    )
+    if owner_row is not None:
+        return int(owner_row) == int(telegram_id)
+
+    normalized = username.strip().lstrip("@").lower() if username else ""
+    return normalized == OWNER_USERNAME
+
+
+async def delete_latest_brief_report() -> tuple[bool, datetime | None]:
+    async with session_factory() as session:
+        row = await session.scalar(
+            select(BriefReport).order_by(BriefReport.created_at.desc(), BriefReport.id.desc()).limit(1)
+        )
+        if row is None:
+            return False, None
+        created_at = row.created_at
+        await session.delete(row)
+        await session.commit()
+        return True, created_at
+
+
 async def consume_usage(session: AsyncSession, user_id: int, key: str, limit: int) -> tuple[bool, int]:
     today = date.today()
     result = await session.execute(select(Usage).where(Usage.user_id == user_id, Usage.day == today, Usage.key == key))
