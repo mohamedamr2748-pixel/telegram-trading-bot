@@ -601,18 +601,37 @@ def _brief_keyboard() -> InlineKeyboardMarkup:
 
 
 def _brief_quote_snapshot(symbol: str, quote: MarketQuote) -> dict:
+    price = float(quote.price)
+    open_price = float(quote.open) if quote.open is not None else None
+    high = float(quote.high) if quote.high is not None else None
+    low = float(quote.low) if quote.low is not None else None
+    previous_close = float(quote.previous_close) if quote.previous_close is not None else None
+    year_high = float(quote.year_high) if quote.year_high is not None else None
+    year_low = float(quote.year_low) if quote.year_low is not None else None
+    day_range_pct = ((high - low) / previous_close * 100.0) if high is not None and low is not None and previous_close else None
+    vs_open_pct = ((price - open_price) / open_price * 100.0) if open_price else None
+    year_position_pct = (
+        (price - year_low) / (year_high - year_low) * 100.0
+        if year_high is not None and year_low is not None and year_high > year_low
+        else None
+    )
     return {
         "symbol": symbol,
         "label": BRIEF_LABELS.get(symbol, symbol),
-        "price": float(quote.price),
-        "price_text": f"{float(quote.price):,.2f}",
+        "price": price,
+        "price_text": f"{price:,.2f}",
         "change_percent": float(quote.change_percent) if quote.change_percent is not None else None,
         "move_text": _move_badge(quote.change_percent),
-        "open": float(quote.open) if quote.open is not None else None,
-        "high": float(quote.high) if quote.high is not None else None,
-        "low": float(quote.low) if quote.low is not None else None,
+        "open": open_price,
+        "high": high,
+        "low": low,
         "volume": float(quote.volume) if quote.volume is not None else 0.0,
-        "previous_close": float(quote.previous_close) if quote.previous_close is not None else None,
+        "previous_close": previous_close,
+        "day_range_pct": day_range_pct,
+        "vs_open_pct": vs_open_pct,
+        "year_high": year_high,
+        "year_low": year_low,
+        "year_position_pct": year_position_pct,
         "market_status": quote.market_status or "unknown",
         "timestamp": quote.timestamp.astimezone(timezone.utc).isoformat(),
         "source": quote.source,
@@ -670,7 +689,7 @@ def _render_brief(report: dict) -> str:
         stale = " • STALE" if quote.get("stale") else ""
         lines.append(f"<b>{label}</b>  <code>{price}</code>  {move}  <i>{escape(status + stale)}</i>")
 
-    lines.extend(["", "🧠 <b>ANALYST READ</b>"])
+    lines.extend(["", "🧠 <b>AI MARKET READ</b>"])
     for item in report.get("cross_asset_insights", [])[:4]:
         lines.append(f"• {escape(str(item))}")
 
@@ -719,6 +738,7 @@ def _render_brief(report: dict) -> str:
         "",
         "━━━━━━━━━━━━━━━━━━━━",
         f"ℹ️ <i>{escape(str(report.get('data_quality', 'Based on the latest available snapshot.')))}</i>",
+        f"🤖 <i>{escape(BOT_USERNAME)} • Powered by OpenRouter</i>",
         "",
         "⚠️ <i>Market information and AI-generated context for orientation, not personalised investment advice.</i>",
     ])
