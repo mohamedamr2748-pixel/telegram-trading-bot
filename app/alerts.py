@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import Alert, User
+from app.subscriptions import is_active_paid_plan
 from app.market import MarketService
 
 
@@ -45,7 +46,7 @@ async def create_price_alert(session: AsyncSession, user: User, symbol: str, con
     symbol = validate_symbol(symbol)
     condition = validate_price_alert(condition, threshold)
     count = await active_alert_count(session, user.id, "price")
-    if user.plan == "free" and count >= FREE_ACTIVE_ALERTS:
+    if not is_active_paid_plan(user) and count >= FREE_ACTIVE_ALERTS:
         raise ValueError(f"Free plan limit reached: {FREE_ACTIVE_ALERTS} active alerts.")
     alert = Alert(user_id=user.id, symbol=symbol, alert_type="price", condition=condition, threshold=threshold, active=True)
     session.add(alert)
@@ -57,7 +58,7 @@ async def create_price_alert(session: AsyncSession, user: User, symbol: str, con
 async def create_smart_alert(session: AsyncSession, user: User, symbol: str) -> Alert:
     symbol = validate_symbol(symbol)
     count = await active_alert_count(session, user.id, "smart")
-    if user.plan == "free" and count >= FREE_ACTIVE_SMART_ALERTS:
+    if not is_active_paid_plan(user) and count >= FREE_ACTIVE_SMART_ALERTS:
         raise ValueError(f"Free plan limit reached: {FREE_ACTIVE_SMART_ALERTS} smart alerts.")
     alert = Alert(user_id=user.id, symbol=symbol, alert_type="smart", condition="unusual_move", active=True)
     session.add(alert)
