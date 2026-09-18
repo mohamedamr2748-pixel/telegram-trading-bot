@@ -89,8 +89,12 @@ def build_brief_pdf(report: dict[str, Any]) -> BytesIO:
                                "LOSERS   " + "   ".join(f"{m.get('symbol','')} {float(m.get('percent_change',0)):+.2f}%" for m in l) or "LOSERS   n/a"]
                 _draw_box(ax, 0.065, 0.29, 0.87, 0.12, "TOP MOVERS", mover_lines)
 
-                quality = _wrap(report.get("data_quality", ""), 88)
-                _draw_box(ax, 0.065, 0.165, 0.87, 0.085, "DATA QUALITY", quality)
+                pulse_line = [
+                    f"Regime: {report.get('market_regime', 'Mixed')}",
+                    f"Tracked assets: {len(quotes[:5])}",
+                    f"Headline set: {len(news[:8])}",
+                ]
+                _draw_box(ax, 0.065, 0.165, 0.87, 0.085, "REPORT SNAPSHOT", pulse_line)
 
             else:
                 ax.text(0.065, 0.82, "NEWS & MONITORING", fontsize=11, fontweight="bold", color="#111827")
@@ -121,7 +125,7 @@ def build_brief_pdf(report: dict[str, Any]) -> BytesIO:
 
             ax.text(
                 0.065, 0.08,
-                f"{BOT_USERNAME}  •  Market information and AI-generated context for orientation, not personalised investment advice.",
+                f"{BOT_USERNAME}  •  Market information and AI-generated context for orientation only; not personalised investment advice.",
                 fontsize=7.5, color="#6b7280",
             )
             fig.savefig(pdf, format="pdf", bbox_inches="tight")
