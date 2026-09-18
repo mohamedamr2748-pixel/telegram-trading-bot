@@ -114,6 +114,13 @@ async def show_subscribe(message: Message) -> None:
 async def subscribe_callback(callback: CallbackQuery) -> None:
     data = callback.data or ""
     action = data.split(":", 1)[1] if ":" in data else ""
+    if action == "show":
+        async with session_factory() as session:
+            user = await get_or_create_user(session, callback.from_user.id, callback.from_user.username)
+        body, keyboard = await _subscribe_screen(user)
+        await callback.message.answer(body, reply_markup=keyboard)
+        await callback.answer()
+        return
     if action == "account":
         await callback.message.answer("👤 Use <code>/account</code> to view your current plan and usage.")
         await callback.answer()
