@@ -210,21 +210,20 @@ async def generate_market_brief(snapshot: dict[str, Any]) -> dict[str, Any]:
         return _shared_cache[1]
 
     prompt = _prompt(snapshot)
+    selected_model = settings.openrouter_model.strip() or PRIMARY_MODEL
     try:
-        report = await _request(settings.openrouter_model.strip() or PRIMARY_MODEL, prompt)
+        report = await _request(selected_model, prompt)
     except Exception as primary_exc:
         logger.warning("Primary OpenRouter brief model failed: %s", primary_exc)
+        selected_model = settings.openrouter_fallback_model.strip() or FALLBACK_MODEL
         try:
-            report = await _request(
-                settings.openrouter_fallback_model.strip() or FALLBACK_MODEL,
-                prompt,
-            )
+            report = await _request(selected_model, prompt)
         except Exception as fallback_exc:
             logger.exception("OpenRouter fallback failed: %s", fallback_exc)
             report = _fallback_report(snapshot, str(fallback_exc)[:160])
 
     report["generated_at"] = datetime.now(timezone.utc).isoformat()
-    report["model"] = settings.openrouter_model.strip() or PRIMARY_MODEL
+    report["model"] = selected_model
     report["bot_username"] = BOT_USERNAME
     _shared_cache = (bucket, report)
     return report
