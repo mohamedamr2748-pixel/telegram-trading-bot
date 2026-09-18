@@ -22,7 +22,7 @@ MODEL_CHAIN = [
     "nvidia/nemotron-3-super-120b-a12b:free",
     "openrouter/free",
 ]
-CACHE_TTL_SECONDS = 5 * 60
+CACHE_TTL_SECONDS = 60 * 60
 
 _shared_cache: tuple[int, dict[str, Any]] | None = None
 
@@ -146,7 +146,8 @@ async def _request(model: str, prompt: str) -> dict[str, Any]:
             {"role": "user", "content": prompt},
         ],
         "temperature": 0.1,
-        "max_tokens": 2200,
+        "max_tokens": 900,
+        "reasoning_effort": "none",
         "response_format": {"type": "json_object"},
     }
     async with httpx.AsyncClient(timeout=30) as client:
@@ -173,12 +174,18 @@ async def _request_chain(prompt: str) -> tuple[dict[str, Any], str]:
     configured = settings.openrouter_model.strip()
     candidates = [configured] if configured else []
     candidates.extend(model for model in MODEL_CHAIN if model not in candidates)
-    for model in candidates[:4]:
+
+    for model in candidates[:3]:
         try:
             return await _request(model, prompt), model
         except Exception as exc:
-            errors.append(f"{model}: {exc}")
+            message = str(exc)
+            errors.append(f"{model}: {message}")
             logger.warning("OpenRouter model failed: %s", errors[-1])
+            # Do not burn the remaining free-model quota when the account is rate limited.
+            if "429" in message or "Too Many Requests" in message:
+                break
+
     raise RuntimeError("All OpenRouter models failed: " + " | ".join(errors)[-700:])
 
 
