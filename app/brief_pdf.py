@@ -482,10 +482,10 @@ def build_brief_pdf(report: dict[str, Any]) -> BytesIO:
         Spacer(1, 7 * mm),
         _section("Cross-Asset Dashboard", styles),
         _market_table(quotes, styles),
-        Spacer(1, 6 * mm),
+        Spacer(1, 4.5 * mm),
         _section("Market Movers", styles, teal=True),
         _movers(report["movers"], styles),
-        Spacer(1, 7 * mm),
+        Spacer(1, 5 * mm),
         _section("Cross-Asset Read", styles),
     ]
 
@@ -498,7 +498,7 @@ def build_brief_pdf(report: dict[str, Any]) -> BytesIO:
         story.append(_insight_card(1, "No additional cross-asset interpretation is available for this report.", styles))
 
     story.extend([
-        PageBreak(),
+        Spacer(1, 5 * mm),
         _section("News Intelligence", styles),
         Spacer(1, 1 * mm),
     ])
@@ -511,13 +511,13 @@ def build_brief_pdf(report: dict[str, Any]) -> BytesIO:
     for index, item in enumerate(news[:5], 1):
         story.append(KeepTogether([
             _news_card(index, item, drivers.get(str(item.get("id"))), styles),
-            Spacer(1, 3.2 * mm),
+            Spacer(1, 2.2 * mm),
         ]))
 
     story.extend([
         _section("Monitoring", styles, teal=True),
         _watch_grid(report["risk_watch"], report["watch_next"], styles),
-        Spacer(1, 8 * mm),
+        Spacer(1, 5 * mm),
         HRFlowable(width="100%", thickness=0.55, color=BORDER, spaceBefore=0, spaceAfter=4 * mm),
         Paragraph(
             "Market information and AI-generated context for orientation only; not personalised investment advice.",
@@ -531,8 +531,8 @@ def build_brief_pdf(report: dict[str, Any]) -> BytesIO:
         pagesize=A4,
         leftMargin=18 * mm,
         rightMargin=18 * mm,
-        topMargin=21 * mm,
-        bottomMargin=18 * mm,
+        topMargin=18 * mm,
+        bottomMargin=16 * mm,
         title="Tickaro Daily Market Brief",
         author=BOT_USERNAME,
         subject="Market overview, cross-asset analysis, movers and news intelligence",
