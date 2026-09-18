@@ -497,21 +497,35 @@ def build_brief_pdf(report: dict[str, Any]) -> BytesIO:
     else:
         story.append(_insight_card(1, "No additional cross-asset interpretation is available for this report.", styles))
 
-    story.extend([
-        Spacer(1, 5 * mm),
-        _section("News Intelligence", styles),
-        Spacer(1, 1 * mm),
-    ])
-
     drivers = {
         str(x.get("news_id")): x
         for x in report["news_implications"]
         if isinstance(x, dict)
     }
-    for index, item in enumerate(news[:5], 1):
+
+    # Keep the section label with its first card so a heading is never stranded
+    # at the bottom of a page. Show one additional headline when space allows.
+    news_items = news[:6]
+    if news_items:
+        first_card = _news_card(1, news_items[0], drivers.get(str(news_items[0].get("id"))), styles)
         story.append(KeepTogether([
-            _news_card(index, item, drivers.get(str(item.get("id"))), styles),
+            Spacer(1, 5 * mm),
+            _section("News Intelligence", styles),
+            Spacer(1, 1 * mm),
+            first_card,
             Spacer(1, 2.2 * mm),
+        ]))
+        for index, item in enumerate(news_items[1:], 2):
+            story.append(KeepTogether([
+                _news_card(index, item, drivers.get(str(item.get("id"))), styles),
+                Spacer(1, 2.2 * mm),
+            ]))
+    else:
+        story.append(KeepTogether([
+            Spacer(1, 5 * mm),
+            _section("News Intelligence", styles),
+            Spacer(1, 1 * mm),
+            _insight_card(1, "No market headlines were available for this report.", styles),
         ]))
 
     story.extend([
@@ -532,7 +546,7 @@ def build_brief_pdf(report: dict[str, Any]) -> BytesIO:
         leftMargin=18 * mm,
         rightMargin=18 * mm,
         topMargin=18 * mm,
-        bottomMargin=16 * mm,
+        bottomMargin=15 * mm,
         title="Tickaro Daily Market Brief",
         author=BOT_USERNAME,
         subject="Market overview, cross-asset analysis, movers and news intelligence",
