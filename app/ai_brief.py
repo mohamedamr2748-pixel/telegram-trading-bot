@@ -196,25 +196,45 @@ def _fallback_report(snapshot: dict[str, Any], reason: str) -> dict[str, Any]:
     negatives = sum(float(q["change_percent"]) < 0 for q in valid)
     regime = "Risk-on" if positives >= 3 else "Risk-off" if negatives >= 3 else "Mixed"
 
-    ranked = sorted(
-        valid,
-        key=lambda q: abs(float(q["change_percent"])),
-        reverse=True,
+    ranked = sorted(valid, key=lambda q: abs(float(q["change_percent"])), reverse=True)
+    summary = (
+        f"{len([q for q in valid if float(q['change_percent']) > 0])} of {len(valid)} tracked assets are higher, "
+        f"while {len([q for q in valid if float(q['change_percent']) < 0])} are lower. "
+        f"The largest absolute move is {ranked[0]['label']} at {float(ranked[0]['change_percent']):+.2f}%."
+        if ranked else
+        "The supplied snapshot does not contain enough valid percentage changes for a cross-asset read."
     )
-    if ranked:
-        lead = ranked[0]
-        summary = (
-            f"{lead['label']} is showing the largest move in the supplied cross-asset snapshot "
-            f"at {float(lead['change_percent']):+.2f}%. The overall tone is {regime.lower()} across the tracked assets."
-        )
-    else:
-        summary = "The supplied market snapshot does not contain enough valid percentage changes for a detailed cross-asset read."
 
-    insights = []
+    by_label = {str(q.get("label")): q for q in valid}
+    insights: list[str] = []
+
+    equity = [by_label.get("S&P 500"), by_label.get("NASDAQ"), by_label.get("Dow Jones")]
+    equity = [q for q in equity if q]
+    if equity:
+        equity_avg = sum(float(q["change_percent"]) for q in equity) / len(equity)
+        direction = "higher" if equity_avg > 0 else "lower" if equity_avg < 0 else "roughly flat"
+        insights.append(f"US equity indices are {direction} on average across the supplied snapshot ({equity_avg:+.2f}% average move).")
+
+    btc = by_label.get("Bitcoin")
+    gold = by_label.get("Gold")
+    if btc and equity:
+        btc_move = float(btc["change_percent"])
+        equity_avg = sum(float(q["change_percent"]) for q in equity) / len(equity)
+        if btc_move > 0 and equity_avg < 0:
+            insights.append("Bitcoin is moving higher while the main US equity indices are lower, indicating cross-asset divergence rather than a uniform move.")
+        elif btc_move < 0 and equity_avg > 0:
+            insights.append("Bitcoin is moving lower while the main US equity indices are higher, another sign of cross-asset divergence.")
+        else:
+            insights.append("Bitcoin and US equities are moving in the same broad direction in the supplied snapshot.")
+
+    if gold:
+        gold_move = float(gold["change_percent"])
+        insights.append(f"Gold is {gold_move:+.2f}% in the supplied snapshot; compare its move with equities and Bitcoin before drawing broader conclusions.")
+
     for quote in ranked[:4]:
-        insights.append(
-            f"{quote['label']} is {float(quote['change_percent']):+.2f}% on the supplied snapshot."
-        )
+        label = quote["label"]
+        move = float(quote["change_percent"])
+        insights.append(f"{label} is {move:+.2f}% on the supplied snapshot.")
 
     news_implications = []
     for item in snapshot.get("news", [])[:4]:
@@ -230,19 +250,20 @@ def _fallback_report(snapshot: dict[str, Any], reason: str) -> dict[str, Any]:
     return {
         "market_regime": regime,
         "executive_summary": summary,
-        "cross_asset_insights": insights,
+        "cross_asset_insights": insights[:4],
         "news_implications": news_implications,
         "risk_watch": [
-            "Watch whether the largest cross-asset moves persist or mean-revert.",
-            "Check fresh market data before acting on a stale snapshot.",
-            "Treat headlines as context rather than confirmed causal explanations.",
+            "Check whether the largest cross-asset moves persist in fresh data.",
+            "Treat headline explanations as context unless supported by additional evidence.",
+            "Re-check any stale quote before using it for decisions.",
         ],
         "watch_next": [
-            "Updated index and asset prices",
+            "Updated US index prices",
+            "Updated Bitcoin and Gold prices",
             "Fresh market-moving headlines",
             "Changes in the top-mover list",
         ],
-        "data_quality": f"AI analysis unavailable for this run ({reason}); deterministic summary shown instead.",
+        "data_quality": f"Automated fallback summary used because AI analysis was unavailable ({reason[:120]}).",
     }
 
 
