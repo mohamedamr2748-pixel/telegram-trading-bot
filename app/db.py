@@ -127,6 +127,14 @@ class SubscriptionPayment(Base):
     is_first_recurring: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
+class BriefReport(Base):
+    __tablename__ = "brief_reports"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), unique=True, index=True)
+    report_json: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
 engine = create_async_engine(_normalise_database_url(settings.database_url), pool_pre_ping=True)
 session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
