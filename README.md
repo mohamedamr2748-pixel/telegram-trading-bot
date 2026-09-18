@@ -41,7 +41,8 @@ The application exposes `GET /health` for hosting health checks.
 - `/alert SYMBOL CONDITION VALUE`
 - `/remove_alert ID`
 - `/market`
-- `/brief`
+- `/brief` — AI-powered daily market brief
+- `/brief_pdf` — export the latest generated brief as a professional PDF
 - `/scanner [top_gainers|top_losers|volume_spike|overbought|oversold]`
 
 Smart alert example: `/alert NVDA smart`
@@ -57,7 +58,9 @@ Advanced chart example: `/chart NVDA 3mo advanced`
 - 10 charts/day
 - 30 news requests/day
 - 5 scanner scans/day
-- 1 daily brief/day
+- 1 daily brief/day (Free)
+- 10 daily briefs/day (Pro)
+- Unlimited briefs/day (Unlimited)
 - 3 why-did-it-move requests/day
 - 3 active smart alerts
 - Basic indicators included
@@ -76,3 +79,8 @@ CI also compiles the project and runs the tests on pushes and pull requests targ
 For Railway production, set `BOT_TOKEN`, `DATABASE_URL`, and `REDIS_URL` as environment variables. PostgreSQL and Redis are external services attached to the application; secrets are not stored in Git.
 
 External data providers can fail or return stale data. The application uses provider adapters so sources can be replaced later. Before production launch, verify current provider behaviour, limits, and data quality.
+
+
+## AI Daily Brief
+
+The Daily Market Brief uses OpenRouter for AI-generated market context. The current primary free model is inclusionai/ling-3.0-flash-fin:free, with openrouter/free as a fallback. The bot shares a five-minute cached market snapshot, so repeated users do not trigger one AI request per user. Configure OPENROUTER_API_KEY in Railway/.env; never commit the key. Free OpenRouter models are rate-limited and provider availability can vary.
