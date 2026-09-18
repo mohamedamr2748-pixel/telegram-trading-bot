@@ -17,6 +17,7 @@ from app.domain import MarketQuote
 from app.indicators import add_basic_indicators
 from app.market import MarketService
 from app.news_cache import NewsCacheService
+from app.subscriptions import effective_plan, install as install_subscriptions, is_active_paid_plan
 from config import settings
 
 router = Router()
@@ -128,7 +129,7 @@ def ticker_format_image() -> BytesIO:
 async def limit_for_user(user_id: int, username: str | None, key: str) -> bool:
     async with session_factory() as session:
         user = await get_or_create_user(session, user_id, username)
-        if user.plan != "free":
+        if is_active_paid_plan(user):
             return True
         ok, _ = await consume_usage(session, user.id, key, LIMITS[key])
     return ok
@@ -210,7 +211,7 @@ async def account(message: Message) -> None:
         await message.answer(
             "👤 <b>MY ACCOUNT</b>\n\n"
             "<b>PLAN</b>\n"
-            f"{user.plan.title()}\n\n"
+            f"{effective_plan(user).title()}\n\n"
             "<b>ACCOUNT</b>\n"
             f"Joined: {user.created_at.strftime('%d %b %Y')}\n\n"
             "<b>PORTFOLIO</b>\n"
@@ -219,7 +220,8 @@ async def account(message: Message) -> None:
             f"Smart alerts: {smart}/3\n\n"
             "<b>SETTINGS</b>\n"
             f"Timezone: {user.timezone}\n\n"
-            "<b>USAGE • TODAY</b>\n"
+            + (f"<b>Pro expires:</b> {user.plan_expires_at.strftime('%d %b %Y, %H:%M UTC')}\n\n" if effective_plan(user) == "pro" and user.plan_expires_at else "")
+            + "<b>USAGE • TODAY</b>\n"
             f"Price: {usage.get('price', 0)}/50\n"
             f"Charts: {usage.get('chart', 0)}/10\n"
             f"News: {usage.get('news', 0)}/30\n"
@@ -227,6 +229,7 @@ async def account(message: Message) -> None:
             f"Brief: {usage.get('brief', 0)}/1\n"
             f"Why: {usage.get('why', 0)}/3\n"
             f"Advanced: {usage.get('advanced', 0)}/3"
+        , reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⭐ Subscribe / Manage Pro", callback_data="subscribe:show")]]) if effective_plan(user) != "unlimited" else None
         )
 
 
@@ -380,7 +383,7 @@ async def add(message: Message) -> None:
         user = await get_or_create_user(session, message.from_user.id, message.from_user.username)
         watchlist = (await session.execute(select(Watchlist).where(Watchlist.user_id == user.id))).scalar_one()
         count = await session.scalar(select(func.count(WatchlistItem.id)).where(WatchlistItem.watchlist_id == watchlist.id)) or 0
-        if count >= 10 and user.plan == "free":
+        if count >= 10 and not is_active_paid_plan(user):
             await message.answer("⚠️ Free plan limit: <b>10 tickers</b> in your watchlist.")
             return
         existing = await session.scalar(select(WatchlistItem).where(WatchlistItem.watchlist_id == watchlist.id, WatchlistItem.symbol == symbol))
@@ -627,7 +630,7 @@ async def add_callback(callback: CallbackQuery) -> None:
         user = await get_or_create_user(session, callback.from_user.id, callback.from_user.username)
         watchlist = (await session.execute(select(Watchlist).where(Watchlist.user_id == user.id))).scalar_one()
         count = await session.scalar(select(func.count(WatchlistItem.id)).where(WatchlistItem.watchlist_id == watchlist.id)) or 0
-        if count >= 10 and user.plan == "free":
+        if count >= 10 and not is_active_paid_plan(user):
             await callback.message.answer("⚠️ Free plan limit: <b>10 tickers</b>.")
             await callback.answer()
             return
@@ -680,5 +683,6 @@ async def menu_callback(callback: CallbackQuery) -> None:
 
 def build_dispatcher() -> Dispatcher:
     dp = Dispatcher()
+    install_subscriptions(router)
     dp.include_router(router)
     return dp
