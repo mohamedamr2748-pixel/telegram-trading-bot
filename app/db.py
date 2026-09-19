@@ -348,6 +348,125 @@ async def delete_latest_brief_report() -> tuple[bool, datetime | None]:
         return True, created_at
 
 
+async def consume_feature_quota(
+    telegram_id: int,
+    username: str | None,
+    feature_key: str,
+    *,
+    source: str = "command",
+    symbol: str | None = None,
+) -> tuple[bool, int, int | None, str, bool]:
+    """Consume the daily quota and record the relevant analytics event.
+
+    Returns: (allowed, used, limit, plan_key, limit_warning)
+    """
+    now = datetime.now(timezone.utc)
+    async with session_factory() as session:
+        result = await session.execute(select(User).where(User.telegram_id == telegram_id))
+        user = result.scalar_one_or_none()
+        if user is None:
+            user = User(
+                telegram_id=telegram_id,
+                username=username,
+                plan=OWNER_PLAN if (username or "").strip().lstrip("@").lower() == OWNER_USERNAME else "free",
+            )
+            session.add(user)
+            await session.flush()
+            session.add(Watchlist(user_id=user.id, name="My Watchlist"))
+            await session.flush()
+
+        if username and user.username != username:
+            user.username = username
+
+        if user.plan == UNLIMITED_PLAN:
+            plan_key = "unlimited"
+        elif user.plan == "pro" and user.plan_expires_at and (
+            user.plan_expires_at if user.plan_expires_at.tzinfo else user.plan_expires_at.replace(tzinfo=timezone.utc)
+        ) > now:
+            plan_key = "premium"
+        else:
+            plan_key = "free"
+
+        limit_row = await session.scalar(
+            select(PlanLimit).where(
+                PlanLimit.plan == plan_key,
+                PlanLimit.feature_key == feature_key,
+            )
+        )
+        limit = limit_row.daily_limit if limit_row is not None else PLAN_LIMITS_DEFAULTS.get(
+            plan_key, PLAN_LIMITS_DEFAULTS["free"]
+        ).get(feature_key, (None, None))[0]
+
+        if limit is None:
+            used = 0
+            allowed = True
+            warning = False
+        else:
+            today = date.today()
+            usage_row = await session.scalar(
+                select(Usage).where(
+                    Usage.user_id == user.id,
+                    Usage.day == today,
+                    Usage.key == feature_key,
+                )
+            )
+            if usage_row is None:
+                usage_row = Usage(user_id=user.id, day=today, key=feature_key, count=0)
+                session.add(usage_row)
+                await session.flush()
+
+            if usage_row.count >= limit:
+                allowed = False
+                used = usage_row.count
+                warning = False
+                session.add(
+                    UsageEvent(
+                        user_id=user.id,
+                        event_name="limit_reached",
+                        command=feature_key,
+                        source=source,
+                        symbol=symbol,
+                        plan=plan_key,
+                        success=False,
+                        metadata_json=f'{{"used":{used},"limit":{limit}}}',
+                    )
+                )
+            else:
+                usage_row.count += 1
+                used = usage_row.count
+                allowed = True
+                warning_threshold = max(1, int((limit * 0.8) + 0.999999))
+                warning = warning_threshold < limit and used == warning_threshold
+                session.add(
+                    UsageEvent(
+                        user_id=user.id,
+                        event_name="feature_used",
+                        command=feature_key,
+                        source=source,
+                        symbol=symbol,
+                        plan=plan_key,
+                        success=None,
+                        metadata_json=f'{{"used":{used},"limit":{limit}}}',
+                    )
+                )
+                if warning:
+                    session.add(
+                        UsageEvent(
+                            user_id=user.id,
+                            event_name="limit_warning",
+                            command=feature_key,
+                            source=source,
+                            symbol=symbol,
+                            plan=plan_key,
+                            success=True,
+                            metadata_json=f'{{"used":{used},"limit":{limit}}}',
+                        )
+                    )
+
+        await session.commit()
+        return allowed, used, limit, plan_key, warning
+
+
 async def consume_usage(session: AsyncSession, user_id: int, key: str, limit: int) -> tuple[bool, int]:
     today = date.today()
     result = await session.execute(select(Usage).where(Usage.user_id == user_id, Usage.day == today, Usage.key == key))
