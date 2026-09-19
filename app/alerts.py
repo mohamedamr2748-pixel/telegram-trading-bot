@@ -6,13 +6,11 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db import Alert, User
+from app.db import Alert, User, get_plan_limit
 from app.subscriptions import is_active_paid_plan
 from app.market import MarketService
 
 
-FREE_ACTIVE_ALERTS = 3
-FREE_ACTIVE_SMART_ALERTS = 3
 VALID_PRICE_CONDITIONS = {"above", "below", "pct_up", "pct_down"}
 
 
@@ -45,10 +43,22 @@ async def active_alert_count(session: AsyncSession, user_id: int, alert_type: st
 async def create_price_alert(session: AsyncSession, user: User, symbol: str, condition: str, threshold: float) -> Alert:
     symbol = validate_symbol(symbol)
     condition = validate_price_alert(condition, threshold)
+    plan_key = "premium" if is_active_paid_plan(user) else "free"
+    limit = await get_plan_limit(plan_key, "price_alerts", persistent=True)
     count = await active_alert_count(session, user.id, "price")
-    if not is_active_paid_plan(user) and count >= FREE_ACTIVE_ALERTS:
-        raise ValueError(f"Free plan limit reached: {FREE_ACTIVE_ALERTS} active alerts.")
-    alert = Alert(user_id=user.id, symbol=symbol, alert_type="price", condition=condition, threshold=threshold, active=True)
+    if limit is not None and count >= limit:
+        plan_label = "Premium" if plan_key == "premium" else "Free"
+        raise ValueError(
+            f"{plan_label} plan limit reached: {limit} active price alerts."
+        )
+    alert = Alert(
+        user_id=user.id,
+        symbol=symbol,
+        alert_type="price",
+        condition=condition,
+        threshold=threshold,
+        active=True,
+    )
     session.add(alert)
     await session.commit()
     await session.refresh(alert)
@@ -57,10 +67,21 @@ async def create_price_alert(session: AsyncSession, user: User, symbol: str, con
 
 async def create_smart_alert(session: AsyncSession, user: User, symbol: str) -> Alert:
     symbol = validate_symbol(symbol)
+    plan_key = "premium" if is_active_paid_plan(user) else "free"
+    limit = await get_plan_limit(plan_key, "smart_alerts", persistent=True)
     count = await active_alert_count(session, user.id, "smart")
-    if not is_active_paid_plan(user) and count >= FREE_ACTIVE_SMART_ALERTS:
-        raise ValueError(f"Free plan limit reached: {FREE_ACTIVE_SMART_ALERTS} smart alerts.")
-    alert = Alert(user_id=user.id, symbol=symbol, alert_type="smart", condition="unusual_move", active=True)
+    if limit is not None and count >= limit:
+        plan_label = "Premium" if plan_key == "premium" else "Free"
+        raise ValueError(
+            f"{plan_label} plan limit reached: {limit} active smart alerts."
+        )
+    alert = Alert(
+        user_id=user.id,
+        symbol=symbol,
+        alert_type="smart",
+        condition="unusual_move",
+        active=True,
+    )
     session.add(alert)
     await session.commit()
     await session.refresh(alert)
