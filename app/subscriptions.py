@@ -8,7 +8,7 @@ from aiogram.filters import Command
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice, Message, PreCheckoutQuery
 from sqlalchemy import select
 
-from app.db import SubscriptionPayment, User, get_or_create_user, record_usage_event, session_factory
+from app.db import SubscriptionPayment, User, get_or_create_user, record_usage_event, resolve_user_plan, session_factory
 from config import settings
 
 SUBSCRIPTION_PERIOD_SECONDS = 30 * 24 * 60 * 60
@@ -24,18 +24,14 @@ def _aware_utc(value: datetime | None) -> datetime | None:
 
 
 def is_active_paid_plan(user: User) -> bool:
-    if user.plan == UNLIMITED_PLAN:
-        return True
-    if user.plan != PRO_PLAN:
-        return False
-    expires_at = _aware_utc(user.plan_expires_at)
-    return expires_at is not None and expires_at > datetime.now(timezone.utc)
+    return resolve_user_plan(user) in {"premium", UNLIMITED_PLAN}
 
 
 def effective_plan(user: User) -> str:
-    if user.plan == UNLIMITED_PLAN:
+    resolved = resolve_user_plan(user)
+    if resolved == UNLIMITED_PLAN:
         return UNLIMITED_PLAN
-    return PRO_PLAN if is_active_paid_plan(user) else "free"
+    return PRO_PLAN if resolved == "premium" else "free"
 
 
 def _format_expiry(user: User) -> str:
