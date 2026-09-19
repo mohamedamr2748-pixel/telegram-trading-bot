@@ -34,6 +34,7 @@ class User(Base):
     plan_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     timezone: Mapped[str] = mapped_column(String(64), default="UTC")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    last_active_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
 
 
 class Watchlist(Base):
@@ -180,11 +181,14 @@ async def init_db() -> None:
         if conn.dialect.name == "postgresql":
             await conn.execute(text("ALTER TABLE users ALTER COLUMN telegram_id TYPE BIGINT"))
             await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS plan_expires_at TIMESTAMP WITH TIME ZONE"))
+            await conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_active_at TIMESTAMP WITH TIME ZONE"))
         else:
             result = await conn.execute(text("PRAGMA table_info(users)"))
             columns = {row[1] for row in result.fetchall()}
             if "plan_expires_at" not in columns:
                 await conn.execute(text("ALTER TABLE users ADD COLUMN plan_expires_at DATETIME"))
+            if "last_active_at" not in columns:
+                await conn.execute(text("ALTER TABLE users ADD COLUMN last_active_at DATETIME"))
     await seed_plan_limits()
 
 
@@ -315,7 +319,7 @@ async def get_or_create_user(session: AsyncSession, telegram_id: int, username: 
             await session.commit()
         return user
 
-    user = User(telegram_id=telegram_id, username=username, plan=OWNER_PLAN if is_owner else "free")
+    user = User(telegram_id=telegram_id, username=username, plan=OWNER_PLAN if is_owner else "free", last_active_at=datetime.now(timezone.utc))
     session.add(user)
     await session.flush()
     session.add(Watchlist(user_id=user.id, name="My Watchlist"))
