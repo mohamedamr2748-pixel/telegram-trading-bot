@@ -8,7 +8,7 @@ from aiogram.filters import Command
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice, Message, PreCheckoutQuery
 from sqlalchemy import select
 
-from app.db import SubscriptionPayment, User, get_or_create_user, session_factory
+from app.db import SubscriptionPayment, User, get_or_create_user, record_usage_event, session_factory
 from config import settings
 
 SUBSCRIPTION_PERIOD_SECONDS = 30 * 24 * 60 * 60
@@ -62,7 +62,7 @@ def _parse_payload(payload: str) -> tuple[int, str] | None:
 def subscribe_keyboard(*, can_buy: bool, payment_url: str | None = None) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     if can_buy and payment_url:
-        rows.append([InlineKeyboardButton(text="⭐ Pay 80 Stars / 30 days", url=payment_url)])
+        rows.append([InlineKeyboardButton(text=f"⭐ Pay {settings.pro_price_stars} Stars / 30 days", url=payment_url)])
     elif can_buy:
         rows.append([InlineKeyboardButton(text="⭐ Subscribe to Pro", callback_data="subscribe:pro")])
     rows.append([InlineKeyboardButton(text="👤 Account", callback_data="subscribe:account")])
@@ -90,7 +90,7 @@ async def _subscribe_screen(user: User) -> tuple[str, InlineKeyboardMarkup]:
         )
 
     features = [
-        "Up to 10 AI market briefs/day",
+        "Up to 5 AI market briefs/day",
         "Higher usage limits across trading tools",
         "More watchlist and alert capacity",
         "Premium trading workflows as they are released",
@@ -112,6 +112,7 @@ async def show_subscribe(message: Message) -> None:
         user = await get_or_create_user(session, message.from_user.id, message.from_user.username)
     body, keyboard = await _subscribe_screen(user)
     await message.answer(body, reply_markup=keyboard)
+    await record_usage_event(message.from_user.id, "premium_viewed", command="premium", source="command", plan=effective_plan(user))
 
 
 async def subscribe_callback(callback: CallbackQuery) -> None:
@@ -122,6 +123,7 @@ async def subscribe_callback(callback: CallbackQuery) -> None:
             user = await get_or_create_user(session, callback.from_user.id, callback.from_user.username)
         body, keyboard = await _subscribe_screen(user)
         await callback.message.answer(body, reply_markup=keyboard)
+        await record_usage_event(callback.from_user.id, "premium_viewed", command="premium", source="button", plan=effective_plan(user))
         await callback.answer()
         return
     if action == "account":
@@ -134,6 +136,8 @@ async def subscribe_callback(callback: CallbackQuery) -> None:
 
     async with session_factory() as session:
         user = await get_or_create_user(session, callback.from_user.id, callback.from_user.username)
+
+    await record_usage_event(callback.from_user.id, "premium_cta_clicked", command="premium", source="button", plan=effective_plan(user))
 
     if is_active_paid_plan(user):
         await callback.message.answer(
@@ -173,6 +177,7 @@ async def subscribe_callback(callback: CallbackQuery) -> None:
             [InlineKeyboardButton(text="👤 Account", callback_data="subscribe:account")],
         ]
     )
+    await record_usage_event(callback.from_user.id, "checkout_started", command="premium", source="button", plan="premium", metadata={"stars": price})
     await callback.message.answer(
         "<b>⭐ Tickaro Pro Checkout</b>\n\n"
         f"Price: <b>{price} Telegram Stars</b>\n"
@@ -255,6 +260,7 @@ async def successful_payment(message: Message) -> None:
         )
         await session.commit()
 
+    await record_usage_event(message.from_user.id, "payment_completed", command="premium", source="payment", plan="premium", metadata={"stars": payment.total_amount, "recurring": bool(payment.is_recurring)})
     await message.answer(
         "<b>✅ Tickaro Pro activated</b>\n\n"
         f"Active until: <code>{expiration.strftime('%d %b %Y, %H:%M UTC')}</code>\n"
