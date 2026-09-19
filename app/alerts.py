@@ -6,8 +6,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db import Alert, User, get_plan_limit
-from app.subscriptions import is_active_paid_plan
+from app.db import Alert, User, get_plan_limit, resolve_user_plan
 from app.market import MarketService
 
 
@@ -43,7 +42,7 @@ async def active_alert_count(session: AsyncSession, user_id: int, alert_type: st
 async def create_price_alert(session: AsyncSession, user: User, symbol: str, condition: str, threshold: float) -> Alert:
     symbol = validate_symbol(symbol)
     condition = validate_price_alert(condition, threshold)
-    plan_key = "premium" if is_active_paid_plan(user) else "free"
+    plan_key = resolve_user_plan(user)
     limit = await get_plan_limit(plan_key, "price_alerts", persistent=True)
     count = await active_alert_count(session, user.id, "price")
     if limit is not None and count >= limit:
@@ -67,7 +66,7 @@ async def create_price_alert(session: AsyncSession, user: User, symbol: str, con
 
 async def create_smart_alert(session: AsyncSession, user: User, symbol: str) -> Alert:
     symbol = validate_symbol(symbol)
-    plan_key = "premium" if is_active_paid_plan(user) else "free"
+    plan_key = resolve_user_plan(user)
     limit = await get_plan_limit(plan_key, "smart_alerts", persistent=True)
     count = await active_alert_count(session, user.id, "smart")
     if limit is not None and count >= limit:
