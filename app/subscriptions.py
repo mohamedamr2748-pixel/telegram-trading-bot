@@ -196,7 +196,7 @@ async def pre_checkout(pre_checkout_query: PreCheckoutQuery) -> None:
     if not valid:
         await pre_checkout_query.answer(
             ok=False,
-            error_message="This subscription invoice is no longer valid. Please open /subscribe and try again.",
+            error_message="This subscription invoice is no longer valid. Please open /premium and try again.",
         )
         return
     await pre_checkout_query.answer(ok=True)
@@ -265,7 +265,7 @@ async def successful_payment(message: Message) -> None:
 def install(router: Router) -> None:
     if getattr(router, "_subscriptions_installed", False):
         return
-    router.message.register(show_subscribe, Command("subscribe"))
+    router.message.register(show_subscribe, Command("premium"))
     router.callback_query.register(subscribe_callback, F.data.startswith("subscribe:"))
     router.pre_checkout_query.register(pre_checkout)
     router.message.register(successful_payment, F.successful_payment)
