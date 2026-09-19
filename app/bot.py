@@ -1308,9 +1308,18 @@ async def add_callback(callback: CallbackQuery) -> None:
     async with session_factory() as session:
         user = await get_or_create_user(session, callback.from_user.id, callback.from_user.username)
         watchlist = (await session.execute(select(Watchlist).where(Watchlist.user_id == user.id))).scalar_one()
-        count = await session.scalar(select(func.count(WatchlistItem.id)).where(WatchlistItem.watchlist_id == watchlist.id)) or 0
-        if count >= 10 and not is_active_paid_plan(user):
-            await callback.message.answer("⚠️ Free plan limit: <b>10 tickers</b>.")
+        count = await session.scalar(
+            select(func.count(WatchlistItem.id)).where(WatchlistItem.watchlist_id == watchlist.id)
+        ) or 0
+        persistent_limit = await get_plan_limit(
+            effective_plan(user), "watchlist_tickers", persistent=True
+        )
+        if persistent_limit is not None and count >= persistent_limit:
+            plan_label = "Premium" if effective_plan(user) == "pro" else effective_plan(user).title()
+            await callback.message.answer(
+                f"⚠️ <b>Watchlist capacity reached</b>\n"
+                f"You have {count}/{persistent_limit} tickers on your {plan_label} plan."
+            )
             await callback.answer()
             return
         existing = await session.scalar(select(WatchlistItem).where(WatchlistItem.watchlist_id == watchlist.id, WatchlistItem.symbol == symbol))
