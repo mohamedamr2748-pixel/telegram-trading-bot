@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 
-from sqlalchemy import BigInteger, Boolean, Date, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, select, text
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -111,6 +111,41 @@ class Usage(Base):
     __table_args__ = (UniqueConstraint("user_id", "day", "key", name="uq_usage"),)
 
 
+class PlanLimit(Base):
+    __tablename__ = "plan_limits"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    plan: Mapped[str] = mapped_column(String(32), index=True)
+    feature_key: Mapped[str] = mapped_column(String(64), index=True)
+    daily_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    persistent_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+    __table_args__ = (UniqueConstraint("plan", "feature_key", name="uq_plan_limit_feature"),)
+
+
+class UsageEvent(Base):
+    __tablename__ = "usage_events"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    event_name: Mapped[str] = mapped_column(String(64), index=True)
+    command: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    source: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    symbol: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    plan: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    success: Mapped[bool | None] = mapped_column(Boolean, nullable=True, index=True)
+    latency_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ai_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        index=True,
+    )
+    metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 class SubscriptionPayment(Base):
     __tablename__ = "subscription_payments"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -150,6 +185,116 @@ async def init_db() -> None:
             columns = {row[1] for row in result.fetchall()}
             if "plan_expires_at" not in columns:
                 await conn.execute(text("ALTER TABLE users ADD COLUMN plan_expires_at DATETIME"))
+    await seed_plan_limits()
+
+
+PLAN_LIMITS_DEFAULTS = {
+    "free": {
+        "price": (30, None), "market": (5, None), "chart": (5, None), "news": (5, None),
+        "why": (2, None), "scanner": (2, None), "brief": (1, None), "brief_pdf": (2, None),
+        "watchlist": (20, None), "add": (10, None), "remove": (10, None), "alerts": (20, None),
+        "alert": (3, None), "watchlist_tickers": (None, 10), "price_alerts": (None, 3), "smart_alerts": (None, 3),
+    },
+    "premium": {
+        "price": (150, None), "market": (30, None), "chart": (30, None), "news": (30, None),
+        "why": (15, None), "scanner": (12, None), "brief": (5, None), "brief_pdf": (10, None),
+        "watchlist": (100, None), "add": (50, None), "remove": (50, None), "alerts": (100, None),
+        "alert": (20, None), "watchlist_tickers": (None, 50), "price_alerts": (None, 20), "smart_alerts": (None, 20),
+    },
+    "unlimited": {
+        "price": (None, None), "market": (None, None), "chart": (None, None), "news": (None, None),
+        "why": (None, None), "scanner": (None, None), "brief": (None, None), "brief_pdf": (None, None),
+        "watchlist": (None, None), "add": (None, None), "remove": (None, None), "alerts": (None, None),
+        "alert": (None, None), "watchlist_tickers": (None, None), "price_alerts": (None, None), "smart_alerts": (None, None),
+    },
+}
+
+
+def normalise_plan_key(plan: str) -> str:
+    return "premium" if plan == "pro" else plan
+
+
+async def seed_plan_limits() -> None:
+    async with session_factory() as session:
+        for plan, features in PLAN_LIMITS_DEFAULTS.items():
+            for feature_key, (daily_limit, persistent_limit) in features.items():
+                row = await session.scalar(
+                    select(PlanLimit).where(
+                        PlanLimit.plan == plan,
+                        PlanLimit.feature_key == feature_key,
+                    )
+                )
+                if row is None:
+                    session.add(
+                        PlanLimit(
+                            plan=plan,
+                            feature_key=feature_key,
+                            daily_limit=daily_limit,
+                            persistent_limit=persistent_limit,
+                        )
+                    )
+        await session.commit()
+
+
+async def get_plan_limit(plan: str, feature_key: str, persistent: bool = False) -> int | None:
+    plan_key = normalise_plan_key(plan)
+    async with session_factory() as session:
+        row = await session.scalar(
+            select(PlanLimit).where(
+                PlanLimit.plan == plan_key,
+                PlanLimit.feature_key == feature_key,
+            )
+        )
+        if row is not None:
+            return row.persistent_limit if persistent else row.daily_limit
+    fallback = PLAN_LIMITS_DEFAULTS.get(plan_key, PLAN_LIMITS_DEFAULTS["free"]).get(feature_key)
+    return fallback[1 if persistent else 0] if fallback else None
+
+
+async def get_plan_limits(plan: str) -> dict[str, tuple[int | None, int | None]]:
+    plan_key = normalise_plan_key(plan)
+    async with session_factory() as session:
+        result = await session.execute(
+            select(PlanLimit.feature_key, PlanLimit.daily_limit, PlanLimit.persistent_limit)
+            .where(PlanLimit.plan == plan_key)
+        )
+        rows = {key: (daily, persistent) for key, daily, persistent in result.all()}
+    return rows or PLAN_LIMITS_DEFAULTS.get(plan_key, PLAN_LIMITS_DEFAULTS["free"]).copy()
+
+
+async def record_usage_event(
+    user_id: int,
+    event_name: str,
+    *,
+    command: str | None = None,
+    source: str | None = None,
+    symbol: str | None = None,
+    plan: str | None = None,
+    success: bool | None = None,
+    latency_ms: float | None = None,
+    ai_model: str | None = None,
+    metadata: dict | None = None,
+) -> None:
+    try:
+        import json
+        async with session_factory() as session:
+            session.add(
+                UsageEvent(
+                    user_id=user_id,
+                    event_name=event_name,
+                    command=command,
+                    source=source,
+                    symbol=symbol,
+                    plan=normalise_plan_key(plan or "free"),
+                    success=success,
+                    latency_ms=latency_ms,
+                    ai_model=ai_model,
+                    metadata_json=json.dumps(metadata or {}, ensure_ascii=False, separators=(",", ":")),
+                )
+            )
+            await session.commit()
+    except Exception:
+        return
 
 
 async def get_or_create_user(session: AsyncSession, telegram_id: int, username: str | None) -> User:
