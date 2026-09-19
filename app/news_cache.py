@@ -57,5 +57,19 @@ class NewsCacheService:
         await self.demand.mark_requested(symbol)
         return await self._read(symbol, limit)
 
+    async def get_or_refresh(self, symbol: str, limit: int = 12) -> list[NewsItemDTO]:
+        items = await self._read(symbol, limit)
+        if items:
+            await self.demand.mark_requested(symbol)
+            return items
+        try:
+            from app.news_feed import GoogleNewsFeed, store_news
+            fresh = await GoogleNewsFeed().fetch(symbol, limit=40)
+            await store_news(fresh)
+            await self.demand.mark_requested(symbol)
+            return fresh[:limit]
+        except Exception:
+            return []
+
     async def close(self) -> None:
         await self.demand.close()
