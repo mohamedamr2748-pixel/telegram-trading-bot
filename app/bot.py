@@ -1272,6 +1272,9 @@ async def add_callback(callback: CallbackQuery) -> None:
 @router.callback_query(F.data.startswith("smart:"))
 async def smart_callback(callback: CallbackQuery) -> None:
     symbol = callback.data.split(":", 1)[1]
+
+    if not await _callback_limit(callback, "alert", symbol):
+        return
     async with session_factory() as session:
         user = await get_or_create_user(session, callback.from_user.id, callback.from_user.username)
         try:
