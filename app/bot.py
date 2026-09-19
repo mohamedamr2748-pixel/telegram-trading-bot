@@ -349,7 +349,7 @@ async def price(message: Message) -> None:
         await message.answer("Usage: <code>/price AAPL</code>")
         return
     symbol = parts[1].strip().upper()
-    if not await limit_or_message(message, "price"):
+    if not await limit_or_message(message, "price", symbol):
         return
     try:
         quote = await market.get_quote(symbol)
@@ -362,30 +362,24 @@ async def price(message: Message) -> None:
 @router.message(Command("chart"))
 async def chart(message: Message) -> None:
     parts = message.text.split() if message.text else []
-    if len(parts) < 2 or len(parts) > 4:
+    if len(parts) != 2:
         await message.answer(
-            "Usage: <code>/chart SYMBOL [1d|5d|1mo|3mo|6mo|1y] [advanced]</code>\n\n"
-            "Use the ticker in its exact supported format.\n"
-            "Examples: <code>AAPL</code> • <code>BTC-USD</code> • <code>GC=F</code>"
+            "Usage: <code>/chart SYMBOL</code>\n\n"
+            "Example: <code>/chart AAPL</code>"
         )
         return
-    symbol = parts[1].upper()
-    period = parts[2] if len(parts) >= 3 and parts[2].lower() != "advanced" else "1mo"
-    advanced = any(p.lower() == "advanced" for p in parts[2:])
-    allowed_periods = {"1d", "5d", "1mo", "3mo", "6mo", "1y"}
-    if period not in allowed_periods:
-        await message.answer("Unsupported period. Use: 1d, 5d, 1mo, 3mo, 6mo, 1y")
+    symbol = parts[1].strip().upper()
+
+    if not await limit_or_message(message, "chart", symbol):
         return
-    if advanced and not await limit_or_message(message, "advanced"):
-        return
-    if not await limit_or_message(message, "chart"):
-        return
-    interval = "15m" if period in {"1d", "5d"} else "1d"
+
     try:
-        df = await market.get_history(symbol, period=period, interval=interval)
-        image = await render_chart(df, symbol, f"{period}/{interval}", advanced=advanced)
-        caption = f"📈 <b>{symbol}</b> • {period}/{interval} • UTC" + (" • advanced" if advanced else "")
-        await message.answer_photo(BufferedInputFile(image.getvalue(), filename=f"{symbol}.png"), caption=caption)
+        df = await market.get_history(symbol, period="1mo", interval="1d")
+        image = await render_chart(df, symbol, "1mo/1d")
+        await message.answer_photo(
+            BufferedInputFile(image.getvalue(), filename=f"{symbol}.png"),
+            caption=f"📈 <b>{symbol}</b> • 1mo/1d • UTC"
+        )
     except ValueError:
         guide = ticker_format_image()
         await message.answer_photo(
@@ -397,7 +391,9 @@ async def chart(message: Message) -> None:
             ),
         )
     except Exception:
-        await message.answer(f"⚠️ We couldn't generate a chart for <b>{symbol}</b> right now. Please try again later.")
+        await message.answer(
+            f"⚠️ We couldn't generate a chart for <b>{symbol}</b> right now. Please try again later."
+        )
 
 
 @router.message(Command("news"))
@@ -408,7 +404,7 @@ async def news_cmd(message: Message) -> None:
         return
     symbol = parts[1].strip().upper()
 
-    if not await limit_or_message(message, "news"):
+    if not await limit_or_message(message, "news", symbol):
         return
 
     try:
@@ -458,7 +454,7 @@ async def why_cmd(message: Message) -> None:
         await message.answer("Usage: <code>/why AAPL</code>")
         return
     symbol = parts[1].strip().upper()
-    if not await limit_or_message(message, "why"):
+    if not await limit_or_message(message, "why", symbol):
         return
     try:
         quote = await market.get_quote(symbol)
@@ -483,6 +479,8 @@ async def get_watchlist(session, user_id: int) -> list[WatchlistItem]:
 
 @router.message(Command("watchlist"))
 async def watchlist(message: Message) -> None:
+    if not await limit_or_message(message, "watchlist"):
+        return
     async with session_factory() as session:
         user = await get_or_create_user(session, message.from_user.id, message.from_user.username)
         items = await get_watchlist(session, user.id)
@@ -534,6 +532,8 @@ async def remove(message: Message) -> None:
         await message.answer("Usage: <code>/remove AAPL</code>")
         return
     symbol = parts[1].strip().upper()
+    if not await limit_or_message(message, "remove", symbol):
+        return
     async with session_factory() as session:
         user = await get_or_create_user(session, message.from_user.id, message.from_user.username)
         result = await session.execute(select(WatchlistItem).join(Watchlist).where(Watchlist.user_id == user.id, WatchlistItem.symbol == symbol))
@@ -548,6 +548,8 @@ async def remove(message: Message) -> None:
 
 @router.message(Command("alerts"))
 async def alerts(message: Message) -> None:
+    if not await limit_or_message(message, "alerts"):
+        return
     async with session_factory() as session:
         user = await get_or_create_user(session, message.from_user.id, message.from_user.username)
         rows = await list_alerts(session, user.id)
@@ -1023,6 +1025,8 @@ async def delete_brief_pdf_command(message: Message) -> None:
 
 @router.message(Command("brief_pdf"))
 async def brief_pdf_command(message: Message) -> None:
+    if not await limit_or_message(message, "brief_pdf"):
+        return
     report = await _get_latest_brief(message.from_user.id)
     if not report:
         await message.answer("📄 No saved brief is available yet. Run <code>/brief</code> first.")
@@ -1094,7 +1098,7 @@ async def brief_pdf_callback(callback: CallbackQuery) -> None:
 @router.callback_query(F.data.startswith("chart:"))
 async def chart_callback(callback: CallbackQuery) -> None:
     symbol = callback.data.split(":", 1)[1]
-    if not await _callback_limit(callback, "chart"):
+    if not await _callback_limit(callback, "chart", symbol):
         return
     try:
         df = await market.get_history(symbol, "1mo", "1d")
@@ -1118,7 +1122,7 @@ async def chart_callback(callback: CallbackQuery) -> None:
 @router.callback_query(F.data.startswith("news:"))
 async def news_callback(callback: CallbackQuery) -> None:
     symbol = callback.data.split(":", 1)[1].upper()
-    if not await _callback_limit(callback, "news"):
+    if not await _callback_limit(callback, "news", symbol):
         return
 
     await callback.answer("Curating major financial news...")
