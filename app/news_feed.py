@@ -78,7 +78,9 @@ def _published_at(entry: object) -> datetime | None:
 
 
 def _google_news_url(symbol: str) -> str:
-    query = SPECIAL_QUERIES.get(symbol, f'"{symbol}" stock OR shares')
+    base = SPECIAL_QUERIES.get(symbol, f'"{symbol}" stock OR shares')
+    trusted_sites = " OR ".join(f"site:{domain}" for domain in TRUSTED_NEWS_DOMAINS)
+    query = f"({base}) ({trusted_sites})"
     return f"https://news.google.com/rss/search?q={quote_plus(query)}&hl=en-US&gl=US&ceid=US:en"
 
 
