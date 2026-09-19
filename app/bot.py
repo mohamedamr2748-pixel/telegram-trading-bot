@@ -266,35 +266,39 @@ async def start(message: Message) -> None:
 @router.message(Command("help"))
 async def help_cmd(message: Message) -> None:
     await message.answer(
-        "<b>📚 Tickaro Commands</b>\n\n"
-        "<b>Market</b>\n"
-        "/price SYMBOL — live quote\n"
-        "/market — market overview\n"
-        "/brief — AI-powered daily market brief\n"
-        "/brief_pdf — export your latest brief as PDF\n\n"
-        "<b>Analysis</b>\n"
-        "/chart SYMBOL [PERIOD] [advanced]\n"
-        "/why SYMBOL — move context\n"
-        "/scanner [MODE] — market scanner\n\n"
-        "<b>News & Watchlist</b>\n"
-        "/news SYMBOL\n"
-        "/watchlist\n"
-        "/add SYMBOL\n"
-        "/remove SYMBOL\n\n"
-        "<b>Alerts</b>\n"
-        "/alerts\n"
-        "/alert SYMBOL CONDITION VALUE\n"
-        "/alert SYMBOL smart\n"
-        "/remove_alert ID\n\n"
-        "<b>Account</b>\n"
-        "/account\n\n"
-        "<b>Ticker examples</b>\n"
+        "<b>📚 TICKARO • EXAMPLES</b>\n\n"
+        "<b>🚀 START</b>\n"
+        "<code>/start</code>\n"
+        "<code>/premium</code>\n\n"
+        "<b>📊 MARKET & CHARTS</b>\n"
         "<code>/price AAPL</code>\n"
-        "<code>/chart NVDA 3mo</code>\n"
-        "<code>/chart BTC-USD 1mo</code>\n"
-        "<code>/chart GC=F 1mo</code>\n"
-        "<code>/chart EURUSD=X 1mo</code>\n\n"
-        "<i>Use the ticker in its exact supported format.</i>"
+        "<code>/chart NVDA</code>\n"
+        "<code>/market</code>\n\n"
+        "<b>📰 NEWS & ANALYSIS</b>\n"
+        "<code>/news AAPL</code>\n"
+        "<code>/why NVDA</code>\n\n"
+        "<b>⭐ WATCHLIST</b>\n"
+        "<code>/add AAPL</code>\n"
+        "<code>/remove AAPL</code>\n"
+        "<code>/watchlist</code>\n\n"
+        "<b>🔔 ALERTS</b>\n"
+        "<code>/alert AAPL above 250</code>\n"
+        "<code>/alert NVDA pct_up 5</code>\n"
+        "<code>/alert NVDA smart</code>\n"
+        "<code>/alerts</code>\n\n"
+        "<b>🔎 SCANNER</b>\n"
+        "<code>/scanner</code>\n"
+        "<code>/scanner top_gainers</code>\n"
+        "<code>/scanner top_losers</code>\n"
+        "<code>/scanner volume_spike</code>\n"
+        "<code>/scanner overbought</code>\n"
+        "<code>/scanner oversold</code>\n\n"
+        "<b>🌅 BRIEF</b>\n"
+        "<code>/brief</code>\n"
+        "<code>/brief_pdf</code>\n\n"
+        "<b>👤 ACCOUNT</b>\n"
+        "<code>/account</code>\n\n"
+        "<i>Most actions can also be done using the buttons inside the bot.</i>"
     )
 
 
@@ -378,7 +382,8 @@ async def chart(message: Message) -> None:
         image = await render_chart(df, symbol, "1mo/1d")
         await message.answer_photo(
             BufferedInputFile(image.getvalue(), filename=f"{symbol}.png"),
-            caption=f"📈 <b>{symbol}</b> • 1mo/1d • UTC"
+            caption=f"📈 <b>{symbol}</b> • 1mo/1d • UTC",
+            reply_markup=asset_actions(symbol),
         )
     except ValueError:
         guide = ticker_format_image()
@@ -504,23 +509,68 @@ async def add(message: Message) -> None:
         await message.answer("Usage: <code>/add AAPL</code>")
         return
     symbol = parts[1].strip().upper()
+
     async with session_factory() as session:
         user = await get_or_create_user(session, message.from_user.id, message.from_user.username)
-        watchlist = (await session.execute(select(Watchlist).where(Watchlist.user_id == user.id))).scalar_one()
-        count = await session.scalar(select(func.count(WatchlistItem.id)).where(WatchlistItem.watchlist_id == watchlist.id)) or 0
-        if count >= 10 and not is_active_paid_plan(user):
-            await message.answer("⚠️ Free plan limit: <b>10 tickers</b> in your watchlist.")
-            return
-        existing = await session.scalar(select(WatchlistItem).where(WatchlistItem.watchlist_id == watchlist.id, WatchlistItem.symbol == symbol))
+        watchlist = (await session.execute(
+            select(Watchlist).where(Watchlist.user_id == user.id)
+        )).scalar_one()
+        count = await session.scalar(
+            select(func.count(WatchlistItem.id)).where(WatchlistItem.watchlist_id == watchlist.id)
+        ) or 0
+        persistent_limit = await get_plan_limit(
+            effective_plan(user), "watchlist_tickers", persistent=True
+        )
+        existing = await session.scalar(
+            select(WatchlistItem).where(
+                WatchlistItem.watchlist_id == watchlist.id,
+                WatchlistItem.symbol == symbol,
+            )
+        )
         if existing:
             await message.answer(f"ℹ️ <b>{symbol}</b> is already in your watchlist.")
             return
-        try:
-            quote = await market.get_quote(symbol)
-        except Exception:
-            await message.answer(f"❌ I can't validate <b>{symbol}</b> right now.")
+        if persistent_limit is not None and count >= persistent_limit:
+            await message.answer(
+                f"⚠️ <b>Watchlist capacity reached</b>\n"
+                f"You have {count}/{persistent_limit} tickers. "
+                + (
+                    f"⭐ Premium includes up to <b>{persistent_limit}</b> tickers."
+                    if effective_plan(user) == "free"
+                    else "Please remove a ticker before adding another."
+                )
+            )
             return
-        session.add(WatchlistItem(watchlist_id=watchlist.id, symbol=symbol, asset_class=quote.asset_class))
+
+    if not await limit_or_message(message, "add", symbol):
+        return
+
+    try:
+        quote = await market.get_quote(symbol)
+    except Exception:
+        await message.answer(f"❌ I can't validate <b>{symbol}</b> right now.")
+        return
+
+    async with session_factory() as session:
+        user = await get_or_create_user(session, message.from_user.id, message.from_user.username)
+        watchlist = (await session.execute(
+            select(Watchlist).where(Watchlist.user_id == user.id)
+        )).scalar_one()
+        existing = await session.scalar(
+            select(WatchlistItem).where(
+                WatchlistItem.watchlist_id == watchlist.id,
+                WatchlistItem.symbol == symbol,
+            )
+        )
+        if existing:
+            return
+        session.add(
+            WatchlistItem(
+                watchlist_id=watchlist.id,
+                symbol=symbol,
+                asset_class=quote.asset_class,
+            )
+        )
         await session.commit()
     await message.answer(f"✅ <b>{symbol}</b> added to your watchlist.")
 
@@ -532,17 +582,34 @@ async def remove(message: Message) -> None:
         await message.answer("Usage: <code>/remove AAPL</code>")
         return
     symbol = parts[1].strip().upper()
-    if not await limit_or_message(message, "remove", symbol):
-        return
     async with session_factory() as session:
         user = await get_or_create_user(session, message.from_user.id, message.from_user.username)
-        result = await session.execute(select(WatchlistItem).join(Watchlist).where(Watchlist.user_id == user.id, WatchlistItem.symbol == symbol))
+        result = await session.execute(
+            select(WatchlistItem).join(Watchlist).where(
+                Watchlist.user_id == user.id,
+                WatchlistItem.symbol == symbol,
+            )
+        )
         item = result.scalar_one_or_none()
         if not item:
             await message.answer(f"ℹ️ <b>{symbol}</b> is not in your watchlist.")
             return
-        await session.delete(item)
-        await session.commit()
+
+    if not await limit_or_message(message, "remove", symbol):
+        return
+
+    async with session_factory() as session:
+        user = await get_or_create_user(session, message.from_user.id, message.from_user.username)
+        result = await session.execute(
+            select(WatchlistItem).join(Watchlist).where(
+                Watchlist.user_id == user.id,
+                WatchlistItem.symbol == symbol,
+            )
+        )
+        item = result.scalar_one_or_none()
+        if item:
+            await session.delete(item)
+            await session.commit()
     await message.answer(f"✅ <b>{symbol}</b> removed from your watchlist.")
 
 
@@ -567,34 +634,38 @@ async def alerts(message: Message) -> None:
 @router.message(Command("alert"))
 async def alert(message: Message) -> None:
     parts = message.text.split() if message.text else []
-    if len(parts) == 3 and parts[2].lower() == "smart":
-        symbol = parts[1].upper()
-        async with session_factory() as session:
-            user = await get_or_create_user(session, message.from_user.id, message.from_user.username)
-            try:
-                row = await create_smart_alert(session, user, symbol)
-            except ValueError as exc:
-                await message.answer(str(exc))
-                return
-        await message.answer(f"🧠 <b>Smart alert #{row.id}</b> enabled for <b>{symbol}</b>.")
+    is_smart = len(parts) == 3 and parts[2].lower() == "smart"
+    if not is_smart and len(parts) != 4:
+        await message.answer(
+            "Usage: <code>/alert AAPL above 250</code>\n"
+            "Conditions: above, below, pct_up, pct_down\n"
+            "Smart: <code>/alert NVDA smart</code>"
+        )
         return
-    if len(parts) != 4:
-        await message.answer("Usage: <code>/alert AAPL above 250</code>\nConditions: above, below, pct_up, pct_down\nSmart: <code>/alert NVDA smart</code>")
+
+    symbol = parts[1].upper()
+    if not await limit_or_message(message, "alert", symbol):
         return
-    symbol, condition, raw = parts[1].upper(), parts[2].lower(), parts[3]
-    try:
-        threshold = float(raw)
-    except ValueError:
-        await message.answer("❌ Threshold must be numeric.")
-        return
+
     async with session_factory() as session:
         user = await get_or_create_user(session, message.from_user.id, message.from_user.username)
         try:
-            row = await create_price_alert(session, user, symbol, condition, threshold)
+            if is_smart:
+                row = await create_smart_alert(session, user, symbol)
+                text = f"🧠 <b>Smart alert #{row.id}</b> enabled for <b>{symbol}</b>."
+            else:
+                condition = parts[2].lower()
+                try:
+                    threshold = float(parts[3])
+                except ValueError:
+                    await message.answer("❌ Threshold must be numeric.")
+                    return
+                row = await create_price_alert(session, user, symbol, condition, threshold)
+                text = f"✅ <b>Alert #{row.id}</b> created\n{symbol} • {condition} • {threshold:g}"
         except ValueError as exc:
             await message.answer(str(exc))
             return
-    await message.answer(f"✅ <b>Alert #{row.id}</b> created\n{symbol} • {condition} • {threshold:g}")
+    await message.answer(text)
 
 
 @router.message(Command("remove_alert"))
@@ -674,6 +745,8 @@ async def scanner(message: Message) -> None:
 
 @router.message(Command("market"))
 async def market_cmd(message: Message) -> None:
+    if not await limit_or_message(message, "market"):
+        return
     symbols = ["^GSPC", "^IXIC", "^DJI", "BTC-USD", "GC=F"]
     quotes = await asyncio.gather(*(market.get_quote(s) for s in symbols), return_exceptions=True)
     lines = ["🌍 <b>Market Overview</b>", ""]
