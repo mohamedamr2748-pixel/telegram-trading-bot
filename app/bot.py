@@ -1241,6 +1241,9 @@ async def news_callback(callback: CallbackQuery) -> None:
 @router.callback_query(F.data.startswith("add:"))
 async def add_callback(callback: CallbackQuery) -> None:
     symbol = callback.data.split(":", 1)[1]
+
+    if not await _callback_limit(callback, "add", symbol):
+        return
     async with session_factory() as session:
         user = await get_or_create_user(session, callback.from_user.id, callback.from_user.username)
         watchlist = (await session.execute(select(Watchlist).where(Watchlist.user_id == user.id))).scalar_one()
