@@ -5,6 +5,7 @@ import logging
 
 import uvicorn
 from aiogram import Bot
+from aiogram.types import BotCommand
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from fastapi import FastAPI
@@ -142,6 +143,24 @@ async def run_bot() -> None:
             raise RuntimeError("BOT_TOKEN is required to start the Telegram bot.")
 
         bot = Bot(token=settings.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+        await bot.set_my_commands([
+            BotCommand(command="start", description="Start Tradely"),
+            BotCommand(command="price", description="View a live market price"),
+            BotCommand(command="chart", description="View a price chart for any symbol"),
+            BotCommand(command="news", description="View the latest market news"),
+            BotCommand(command="why", description="Analyse why an asset moved"),
+            BotCommand(command="add", description="Add a ticker to your watchlist"),
+            BotCommand(command="remove", description="Remove a ticker from your watchlist"),
+            BotCommand(command="alert", description="Create a price or smart alert"),
+            BotCommand(command="market", description="View the market overview"),
+            BotCommand(command="scanner", description="Scan the market"),
+            BotCommand(command="brief", description="View the daily market brief"),
+            BotCommand(command="watchlist", description="View your watchlist"),
+            BotCommand(command="alerts", description="View and manage your alerts"),
+            BotCommand(command="premium", description="View Premium and subscription options"),
+            BotCommand(command="account", description="View your account and usage"),
+            BotCommand(command="help", description="Show help and instructions"),
+        ])
         dp = build_dispatcher()
 
         # Do not start database-dependent workers until initialization succeeds.
