@@ -356,25 +356,43 @@ async def news_cmd(message: Message) -> None:
     if not await limit_or_message(message, "news"):
         return
 
-    await message.answer(f"📩 Request received. Checking cached news for <b>{symbol}</b>...")
-    cached_items = await news.get_fresh(symbol, 8)
-    if cached_items is not None:
-        items = cached_items
-    else:
-        try:
-            await market.get_quote(symbol)
-        except Exception:
-            await message.answer(f"❌ <b>{symbol}</b> is not a valid or available ticker right now.")
-            return
-        await message.answer(f"🔎 <b>{symbol}</b> verified. Searching recent news...")
-        items = await news.get(symbol, 8)
-
-    if not items:
-        await message.answer(f"📰 No recent news found for <b>{symbol}</b>.")
+    try:
+        await market.get_quote(symbol)
+    except Exception:
+        await message.answer(f"❌ <b>{symbol}</b> is not a valid or available ticker right now.")
         return
-    body = [f"📰 <b>Latest News — {symbol}</b>", ""]
-    for idx, item in enumerate(items, 1):
-        body.append(f"<b>{idx}.</b> <a href=\"{item.url}\">{item.title}</a>\n<i>{item.source}</i>\n")
+
+    items = await news.get_or_refresh(symbol, 12)
+    if not items:
+        await message.answer(
+            f"📰 No recent coverage from the selected major financial publishers was found for <b>{symbol}</b>."
+        )
+        return
+
+    from app.news_intelligence import curate_news
+    selected, model = await curate_news(symbol, items, limit=5)
+
+    body = [
+        f"📰 <b>Top Financial News — {symbol}</b>",
+        "━━━━━━━━━━━━━━━━━━━━",
+        "",
+    ]
+    for idx, item in enumerate(selected, 1):
+        url = escape(item.url, quote=True)
+        title = escape(item.title)
+        source = escape(item.source)
+        stamp = (
+            item.published_at.strftime("%d %b %H:%M UTC")
+            if item.published_at
+            else "time unavailable"
+        )
+        body.extend([
+            f"<b>{idx}. <a href=\"{url}\">{title}</a></b>",
+            f"<i>{source} • {stamp}</i>",
+            f"🔗 <a href=\"{url}\">Read article</a>",
+            "",
+        ])
+    body.append("<i>AI-curated from major financial publishers.</i>")
     await message.answer("\n".join(body), disable_web_page_preview=True)
 
 
@@ -1051,17 +1069,48 @@ async def _callback_limit(callback: CallbackQuery, key: str) -> bool:
 
 @router.callback_query(F.data.startswith("news:"))
 async def news_callback(callback: CallbackQuery) -> None:
-    symbol = callback.data.split(":", 1)[1]
+    symbol = callback.data.split(":", 1)[1].upper()
     if not await _callback_limit(callback, "news"):
         return
-    items = await news.get(symbol, 6)
-    if not items:
-        await callback.message.answer(f"📰 No recent news found for <b>{symbol}</b>.")
-    else:
-        body = [f"📰 <b>News — {symbol}</b>", ""]
-        body.extend([f"• <a href=\"{x.url}\">{x.title}</a>\n<i>{x.source}</i>\n" for x in items])
+
+    await callback.answer("Curating major financial news...")
+    try:
+        items = await news.get_or_refresh(symbol, 12)
+        if not items:
+            await callback.message.answer(
+                f"📰 No recent coverage from the selected major financial publishers was found for <b>{symbol}</b>."
+            )
+            return
+
+        from app.news_intelligence import curate_news
+        selected, _model = await curate_news(symbol, items, limit=5)
+        body = [
+            f"📰 <b>Top Financial News — {symbol}</b>",
+            "━━━━━━━━━━━━━━━━━━━━",
+            "",
+        ]
+        for idx, item in enumerate(selected, 1):
+            url = escape(item.url, quote=True)
+            title = escape(item.title)
+            source = escape(item.source)
+            stamp = (
+                item.published_at.strftime("%d %b %H:%M UTC")
+                if item.published_at
+                else "time unavailable"
+            )
+            body.extend([
+                f"<b>{idx}. <a href=\"{url}\">{title}</a></b>",
+                f"<i>{source} • {stamp}</i>",
+                f"🔗 <a href=\"{url}\">Read article</a>",
+                "",
+            ])
+        body.append("<i>AI-curated from major financial publishers.</i>")
         await callback.message.answer("\n".join(body), disable_web_page_preview=True)
-    await callback.answer()
+    except Exception:
+        logger.exception("News callback failed for %s", symbol)
+        await callback.message.answer(
+            f"⚠️ Could not load major financial news for <b>{symbol}</b> right now."
+        )
 
 
 @router.callback_query(F.data.startswith("add:"))
