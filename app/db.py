@@ -382,7 +382,7 @@ async def consume_feature_quota(
         if username and user.username != username:
             user.username = username
 
-        if user.plan == UNLIMITED_PLAN:
+        if user.plan == OWNER_PLAN:
             plan_key = "unlimited"
         elif user.plan == "pro" and user.plan_expires_at and (
             user.plan_expires_at if user.plan_expires_at.tzinfo else user.plan_expires_at.replace(tzinfo=timezone.utc)
