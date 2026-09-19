@@ -214,8 +214,30 @@ PLAN_LIMITS_DEFAULTS = {
 }
 
 
-def normalise_plan_key(plan: str) -> str:
-    return "premium" if plan == "pro" else plan
+def normalise_plan_key(plan: str | None) -> str:
+    """Return the canonical quota plan key used by plan_limits."""
+    value = (plan or "free").strip().lower()
+    if value in {"pro", "premium"}:
+        return "premium"
+    if value == "unlimited":
+        return "unlimited"
+    return "free"
+
+
+def resolve_user_plan(user: User, now: datetime | None = None) -> str:
+    """Resolve a user's effective quota plan from stored plan + expiry."""
+    current = now or datetime.now(timezone.utc)
+    stored = normalise_plan_key(user.plan)
+    if stored == "unlimited":
+        return "unlimited"
+    if stored == "premium":
+        expires_at = user.plan_expires_at
+        if expires_at is None:
+            return "free"
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        return "premium" if expires_at > current else "free"
+    return "free"
 
 
 async def seed_plan_limits() -> None:
@@ -382,14 +404,7 @@ async def consume_feature_quota(
         if username and user.username != username:
             user.username = username
 
-        if user.plan == OWNER_PLAN:
-            plan_key = "unlimited"
-        elif user.plan == "pro" and user.plan_expires_at and (
-            user.plan_expires_at if user.plan_expires_at.tzinfo else user.plan_expires_at.replace(tzinfo=timezone.utc)
-        ) > now:
-            plan_key = "premium"
-        else:
-            plan_key = "free"
+        plan_key = resolve_user_plan(user, now)
 
         limit_row = await session.scalar(
             select(PlanLimit).where(
