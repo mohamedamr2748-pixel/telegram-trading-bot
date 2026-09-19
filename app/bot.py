@@ -18,7 +18,7 @@ from app.alerts import create_price_alert, create_smart_alert, list_alerts, remo
 from app.charts import render_chart
 from app.ai_brief import BOT_USERNAME, generate_market_brief
 from app.brief_pdf import build_brief_pdf
-from app.db import BriefReport, Alert, Watchlist, WatchlistItem, consume_usage, delete_latest_brief_report, get_or_create_user, is_owner, session_factory
+from app.db import (BriefReport, Alert, Watchlist, WatchlistItem, consume_feature_quota, consume_usage, delete_latest_brief_report, get_or_create_user, get_plan_limit, get_plan_limits, is_owner, normalise_plan_key, record_usage_event, session_factory)
 from app.domain import MarketQuote
 from app.indicators import add_basic_indicators
 from app.market import MarketService
@@ -32,14 +32,11 @@ logger = logging.getLogger(__name__)
 market = MarketService()
 news = NewsCacheService()
 
-LIMITS = {
-    "price": 50,
-    "chart": 10,
-    "news": 30,
-    "scanner": 5,
-    "brief": 1,
-    "why": 3,
-    "advanced": 3,
+# Fallbacks for UI only; enforcement is database-driven via plan_limits.
+FREE_LIMITS_FALLBACK = {
+    "price": 30, "market": 5, "chart": 5, "news": 5, "why": 2, "scanner": 2,
+    "brief": 1, "brief_pdf": 2, "watchlist": 20, "add": 10, "remove": 10,
+    "alerts": 20, "alert": 3,
 }
 
 
@@ -135,31 +132,99 @@ def ticker_format_image() -> BytesIO:
     return output
 
 
-def _plan_brief_limit(plan: str) -> int | None:
-    return {"free": 1, "pro": 10, "unlimited": None}.get(plan, 1)
+async def _plan_brief_limit_from_db(plan: str) -> int | None:
+    return await get_plan_limit(plan, "brief")
 
 
-async def limit_for_user(user_id: int, username: str | None, key: str) -> bool:
-    async with session_factory() as session:
-        user = await get_or_create_user(session, user_id, username)
-        plan = effective_plan(user)
-        if key == "brief":
-            limit = _plan_brief_limit(plan)
-            if limit is None:
-                return True
-            ok, _ = await consume_usage(session, user.id, key, limit)
-            return ok
-        if is_active_paid_plan(user):
-            return True
-        ok, _ = await consume_usage(session, user.id, key, LIMITS[key])
-    return ok
+async def limit_for_user(
+    user_id: int,
+    username: str | None,
+    key: str,
+    *,
+    source: str = "command",
+    symbol: str | None = None,
+) -> tuple[bool, int, int | None, str, bool]:
+    return await consume_feature_quota(
+        user_id,
+        username,
+        key,
+        source=source,
+        symbol=symbol,
+    )
+
+
+async def limit_or_message(message: Message, key: str, symbol: str | None = None) -> bool:
+    allowed, used, limit, plan, warning = await limit_for_user(
+        message.from_user.id,
+        message.from_user.username,
+        key,
+        source="command",
+        symbol=symbol,
+    )
+    if not allowed:
+        limit_text = str(limit) if limit is not None else "unlimited"
+        await message.answer(
+            f"⚠️ <b>{key.title()} limit reached</b>\n"
+            f"You have used <b>{used}/{limit_text}</b> today on your "
+            f"<b>{'Premium' if plan == 'premium' else plan.title()}</b> plan.\n\n"
+            + (
+                f"⭐ Premium includes <b>{limit_text}</b>/day for this feature."
+                if plan == "free" and limit is not None
+                else "Please try again tomorrow."
+            )
+        )
+        return False
+    if warning and limit is not None:
+        await message.answer(
+            f"ℹ️ <b>{key.title()} usage:</b> {used}/{limit} today.\n"
+            "⭐ Premium removes most day-to-day friction with higher limits."
+        )
+    return True
+
+
+async def _callback_limit(
+    callback: CallbackQuery,
+    key: str,
+    symbol: str | None = None,
+) -> bool:
+    allowed, used, limit, plan, warning = await limit_for_user(
+        callback.from_user.id,
+        callback.from_user.username,
+        key,
+        source="button",
+        symbol=symbol,
+    )
+    if not allowed:
+        limit_text = str(limit) if limit is not None else "unlimited"
+        await callback.message.answer(
+            f"⚠️ <b>{key.title()} limit reached</b>\n"
+            f"You have used <b>{used}/{limit_text}</b> today.\n"
+            + (
+                f"⭐ Premium includes <b>{limit_text}</b>/day for this feature."
+                if plan == "free" and limit is not None
+                else "Please try again tomorrow."
+            )
+        )
+        return False
+    if warning and limit is not None:
+        await callback.message.answer(f"ℹ️ <b>{key.title()} usage:</b> {used}/{limit} today.")
+    await record_usage_event(
+        callback.from_user.id,
+        "button_clicked",
+        command=key,
+        source="button",
+        symbol=symbol,
+        plan=plan,
+        success=True,
+    )
+    return True
 
 
 async def brief_limit_status(user_id: int, username: str | None) -> tuple[bool, int | None]:
     async with session_factory() as session:
         user = await get_or_create_user(session, user_id, username)
-        plan = effective_plan(user)
-        limit = _plan_brief_limit(plan)
+        plan = normalise_plan_key(effective_plan(user))
+        limit = await get_plan_limit(plan, "brief")
         if limit is None:
             return True, None
         from datetime import date
@@ -177,22 +242,11 @@ async def brief_limit_status(user_id: int, username: str | None) -> tuple[bool, 
 async def consume_brief_success(user_id: int, username: str | None) -> None:
     async with session_factory() as session:
         user = await get_or_create_user(session, user_id, username)
-        plan = effective_plan(user)
-        limit = _plan_brief_limit(plan)
+        plan = normalise_plan_key(effective_plan(user))
+        limit = await get_plan_limit(plan, "brief")
         if limit is None:
             return
         await consume_usage(session, user.id, "brief", limit)
-
-
-async def limit_or_message(message: Message, key: str) -> bool:
-    ok = await limit_for_user(message.from_user.id, message.from_user.username, key)
-    if not ok:
-        async with session_factory() as session:
-            user = await get_or_create_user(session, message.from_user.id, message.from_user.username)
-            plan = effective_plan(user)
-        limit = _plan_brief_limit(plan) if key == "brief" else LIMITS[key]
-        await message.answer(f"⚠️ <b>{key.title()} limit reached</b>: {limit}/day on your current plan.")
-    return ok
 
 
 @router.message(Command("start"))
@@ -1059,13 +1113,6 @@ async def chart_callback(callback: CallbackQuery) -> None:
     except Exception:
         await callback.message.answer(f"⚠️ We couldn't generate a chart for <b>{symbol}</b> right now. Please try again later.")
     await callback.answer()
-
-
-async def _callback_limit(callback: CallbackQuery, key: str) -> bool:
-    ok = await limit_for_user(callback.from_user.id, callback.from_user.username, key)
-    if not ok:
-        await callback.message.answer(f"⚠️ Free plan limit reached: <b>{LIMITS[key]}/day</b>.")
-    return ok
 
 
 @router.callback_query(F.data.startswith("news:"))
