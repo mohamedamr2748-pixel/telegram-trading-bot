@@ -1210,6 +1210,8 @@ async def brief_pdf_callback(callback: CallbackQuery) -> None:
         await callback.message.answer("📄 No saved brief is available. Run <code>/brief</code> first.")
         await callback.answer()
         return
+    if not await _callback_limit(callback, "brief_pdf"):
+        return
     try:
         pdf = build_brief_pdf(report)
         filename = f"tickaro-brief-{datetime.now(timezone.utc):%Y%m%d-%H%M}.pdf"
