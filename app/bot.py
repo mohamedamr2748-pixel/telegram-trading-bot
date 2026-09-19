@@ -14,6 +14,7 @@ from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton
 from PIL import Image, ImageDraw, ImageFont
 from sqlalchemy import func, select
 
+from app.activity import LastActivityMiddleware
 from app.alerts import create_price_alert, create_smart_alert, list_alerts, remove_alert
 from app.charts import render_chart
 from app.ai_brief import BOT_USERNAME, generate_market_brief
@@ -31,6 +32,10 @@ router = Router()
 logger = logging.getLogger(__name__)
 market = MarketService()
 news = NewsCacheService()
+
+router.message.middleware(LastActivityMiddleware())
+router.callback_query.middleware(LastActivityMiddleware())
+router.pre_checkout_query.middleware(LastActivityMiddleware())
 
 # Fallbacks for UI only; enforcement is database-driven via plan_limits.
 FREE_LIMITS_FALLBACK = {
