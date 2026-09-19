@@ -309,9 +309,23 @@ async def account(message: Message) -> None:
 
     async with session_factory() as session:
         user = await get_or_create_user(session, message.from_user.id, message.from_user.username)
-        watch_count = await session.scalar(select(func.count(WatchlistItem.id)).join(Watchlist).where(Watchlist.user_id == user.id)) or 0
-        alerts = await session.scalar(select(func.count(Alert.id)).where(Alert.user_id == user.id, Alert.active.is_(True), Alert.alert_type == "price")) or 0
-        smart = await session.scalar(select(func.count(Alert.id)).where(Alert.user_id == user.id, Alert.active.is_(True), Alert.alert_type == "smart")) or 0
+        watch_count = await session.scalar(
+            select(func.count(WatchlistItem.id)).join(Watchlist).where(Watchlist.user_id == user.id)
+        ) or 0
+        alerts = await session.scalar(
+            select(func.count(Alert.id)).where(
+                Alert.user_id == user.id,
+                Alert.active.is_(True),
+                Alert.alert_type == "price",
+            )
+        ) or 0
+        smart = await session.scalar(
+            select(func.count(Alert.id)).where(
+                Alert.user_id == user.id,
+                Alert.active.is_(True),
+                Alert.alert_type == "smart",
+            )
+        ) or 0
         usage_result = await session.execute(
             select(Usage.key, Usage.count).where(
                 Usage.user_id == user.id,
@@ -319,31 +333,67 @@ async def account(message: Message) -> None:
             )
         )
         usage = dict(usage_result.all())
-        brief_limit = "∞" if effective_plan(user) == "unlimited" else str(_plan_brief_limit(effective_plan(user)))
+        plan = effective_plan(user)
 
-        await message.answer(
-            "👤 <b>MY ACCOUNT</b>\n\n"
-            "<b>PLAN</b>\n"
-            f"{effective_plan(user).title()}\n\n"
-            "<b>ACCOUNT</b>\n"
-            f"Joined: {user.created_at.strftime('%d %b %Y')}\n\n"
-            "<b>PORTFOLIO</b>\n"
-            f"Watchlist: {watch_count}/10\n"
-            f"Price alerts: {alerts}/3\n"
-            f"Smart alerts: {smart}/3\n\n"
-            "<b>SETTINGS</b>\n"
-            f"Timezone: {user.timezone}\n\n"
-            + (f"<b>Pro expires:</b> {user.plan_expires_at.strftime('%d %b %Y, %H:%M UTC')}\n\n" if effective_plan(user) == "pro" and user.plan_expires_at else "")
-            + "<b>USAGE • TODAY</b>\n"
-            f"Price: {usage.get('price', 0)}/50\n"
-            f"Charts: {usage.get('chart', 0)}/10\n"
-            f"News: {usage.get('news', 0)}/30\n"
-            f"Scanner: {usage.get('scanner', 0)}/5\n"
-            f"Brief: {usage.get('brief', 0)}/{brief_limit}\n"
-            f"Why: {usage.get('why', 0)}/3\n"
-            f"Advanced: {usage.get('advanced', 0)}/3"
-        , reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⭐ Subscribe / Manage Pro", callback_data="subscribe:show")]]) if effective_plan(user) != "unlimited" else None
-        )
+    limits = await get_plan_limits(plan)
+    display_plan = "Premium" if plan == "pro" else plan.title()
+
+    def daily(name: str) -> str:
+        value = limits.get(name, (None, None))[0]
+        return "∞" if value is None else str(value)
+
+    watch_cap = limits.get("watchlist_tickers", (None, None))[1]
+    price_alert_cap = limits.get("price_alerts", (None, None))[1]
+    smart_alert_cap = limits.get("smart_alerts", (None, None))[1]
+
+    lines = [
+        "👤 <b>MY ACCOUNT</b>",
+        "",
+        "<b>PLAN</b>",
+        display_plan,
+        "",
+        "<b>PERSISTENT LIMITS</b>",
+        f"Watchlist: {watch_count}/{watch_cap if watch_cap is not None else '∞'}",
+        f"Price alerts: {alerts}/{price_alert_cap if price_alert_cap is not None else '∞'}",
+        f"Smart alerts: {smart}/{smart_alert_cap if smart_alert_cap is not None else '∞'}",
+        "",
+        "<b>USAGE • TODAY</b>",
+        f"Price: {usage.get('price', 0)}/{daily('price')}",
+        f"Market: {usage.get('market', 0)}/{daily('market')}",
+        f"Charts: {usage.get('chart', 0)}/{daily('chart')}",
+        f"News: {usage.get('news', 0)}/{daily('news')}",
+        f"Why: {usage.get('why', 0)}/{daily('why')}",
+        f"Scanner: {usage.get('scanner', 0)}/{daily('scanner')}",
+        f"Brief: {usage.get('brief', 0)}/{daily('brief')}",
+        f"Brief PDF: {usage.get('brief_pdf', 0)}/{daily('brief_pdf')}",
+        f"Watchlist views: {usage.get('watchlist', 0)}/{daily('watchlist')}",
+        f"Adds: {usage.get('add', 0)}/{daily('add')}",
+        f"Removes: {usage.get('remove', 0)}/{daily('remove')}",
+        f"Alert views: {usage.get('alerts', 0)}/{daily('alerts')}",
+        f"Alert creates: {usage.get('alert', 0)}/{daily('alert')}",
+    ]
+
+    if plan == "pro" and user.plan_expires_at:
+        lines.extend([
+            "",
+            f"<b>Premium expires:</b> {user.plan_expires_at.strftime('%d %b %Y, %H:%M UTC')}",
+        ])
+
+    await message.answer(
+        "\n".join(lines),
+        reply_markup=(
+            InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(
+                        text="⭐ Manage Premium",
+                        callback_data="subscribe:show",
+                    )]
+                ]
+            )
+            if plan != "unlimited"
+            else None
+        ),
+    )
 
 
 @router.message(Command("price"))
