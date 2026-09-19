@@ -694,6 +694,16 @@ async def alert(message: Message) -> None:
         return
 
     symbol = parts[1].upper()
+    threshold = None
+    condition = None
+    if not is_smart:
+        condition = parts[2].lower()
+        try:
+            threshold = float(parts[3])
+        except ValueError:
+            await message.answer("❌ Threshold must be numeric.")
+            return
+
     if not await limit_or_message(message, "alert", symbol):
         return
 
@@ -704,12 +714,6 @@ async def alert(message: Message) -> None:
                 row = await create_smart_alert(session, user, symbol)
                 text = f"🧠 <b>Smart alert #{row.id}</b> enabled for <b>{symbol}</b>."
             else:
-                condition = parts[2].lower()
-                try:
-                    threshold = float(parts[3])
-                except ValueError:
-                    await message.answer("❌ Threshold must be numeric.")
-                    return
                 row = await create_price_alert(session, user, symbol, condition, threshold)
                 text = f"✅ <b>Alert #{row.id}</b> created\n{symbol} • {condition} • {threshold:g}"
         except ValueError as exc:
@@ -1148,11 +1152,11 @@ async def delete_brief_pdf_command(message: Message) -> None:
 
 @router.message(Command("brief_pdf"))
 async def brief_pdf_command(message: Message) -> None:
-    if not await limit_or_message(message, "brief_pdf"):
-        return
     report = await _get_latest_brief(message.from_user.id)
     if not report:
         await message.answer("📄 No saved brief is available yet. Run <code>/brief</code> first.")
+        return
+    if not await limit_or_message(message, "brief_pdf"):
         return
     try:
         pdf = build_brief_pdf(report)
