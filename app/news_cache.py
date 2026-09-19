@@ -7,6 +7,7 @@ from sqlalchemy import select
 from app.db import NewsAsset, NewsItem, session_factory
 from app.domain import NewsItemDTO
 from app.news_demand import NewsDemandTracker
+from app.news_feed import _is_trusted_news_source
 
 RETENTION_HOURS = 48
 
@@ -44,6 +45,7 @@ class NewsCacheService:
                 symbol=asset_symbol,
             )
             for item, asset_symbol in rows
+            if _is_trusted_news_source(item.source, item.canonical_url)
         ]
 
     async def get_fresh(self, symbol: str, limit: int = 8) -> list[NewsItemDTO] | None:
