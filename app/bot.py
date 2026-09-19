@@ -50,6 +50,7 @@ def main_menu() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="📰 News", callback_data="menu:news"), InlineKeyboardButton(text="🔔 Alerts", callback_data="menu:alerts")],
             [InlineKeyboardButton(text="🔎 Scanner", callback_data="menu:scanner"), InlineKeyboardButton(text="🌅 Brief", callback_data="menu:brief")],
             [InlineKeyboardButton(text="👤 Account", callback_data="menu:account")],
+            [InlineKeyboardButton(text="⭐ Premium", callback_data="subscribe:show")],
         ]
     )
 
