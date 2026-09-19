@@ -36,6 +36,24 @@ SPECIAL_QUERIES = {
 }
 NON_US_EQUITIES = {"BTC-USD", "ETH-USD", "GC=F", "EURUSD=X", "GBPUSD=X", "JPY=X", "BTCUSD", "ETHUSD", "XAUUSD", "EURUSD", "GBPUSD", "USDJPY"}
 
+# User-facing News is restricted to established financial publishers.
+TRUSTED_NEWS_DOMAINS = {
+    "reuters.com", "bloomberg.com", "cnbc.com", "ft.com",
+    "wsj.com", "barrons.com", "marketwatch.com", "apnews.com",
+}
+TRUSTED_NEWS_NAMES = {
+    "reuters", "bloomberg", "cnbc", "financial times",
+    "the wall street journal", "wall street journal",
+    "barron's", "marketwatch", "associated press", "ap news",
+}
+
+def _is_trusted_news_source(source: str, url: str) -> bool:
+    source_norm = source.strip().lower()
+    if source_norm in TRUSTED_NEWS_NAMES:
+        return True
+    host = urlparse(url).netloc.lower().removeprefix("www.")
+    return any(host == domain or host.endswith("." + domain) for domain in TRUSTED_NEWS_DOMAINS)
+
 
 def _normalise_symbol(symbol: str) -> str:
     return symbol.strip().upper()
@@ -90,7 +108,9 @@ class GoogleNewsFeed:
             published_at = _published_at(entry)
             if not title or not url or published_at is None:
                 continue
-            source = str(getattr(getattr(entry, "source", None), "title", "Google News")).strip() or "Google News"
+            source = str(getattr(getattr(entry, "source", None), "title", "")).strip()
+            if not source or not _is_trusted_news_source(source, url):
+                continue
             items.append(NewsItemDTO(title=title, url=url, source=source, published_at=published_at, symbol=symbol))
         return sorted(items, key=lambda item: item.published_at or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
 
